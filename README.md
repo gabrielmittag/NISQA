@@ -31,6 +31,6 @@ To save the results in a .csv file use: `nisqa.exe "path_to_speech_file.wav" "pa
 NISQA is licensed under [GNU General Public License](https://github.com/gabrielmittag/NISQA/blob/master/LICENSE)
 
 
-Copyright © 2019 Quality and Usability Lab, TU Berlin
+Copyright © 2019 Quality and Usability Lab, TU Berlin  
 www.qu.tu-berlin.de
 
