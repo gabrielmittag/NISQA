@@ -13,14 +13,14 @@ More information about the model can be found here:
 ## NISQA v0.4
 NISQA can be run as a command line tool in Windows 10 for research purposes (Win 10 needs to be updated to at least ver. 1809). The neural networks "nisqa_cnn.onnx" and "nisqa_lstm.onnx" must be placed in the folder from which you are running "nisqa.exe" from.
 
-NISQA accepts .wav files with a duration of 5 to 12 seconds. The sample rate of the degraded speech files should be 48 kHz. NISQA can also upsample .wav files with sample rates of 8, 16, 32, and 44.1 kHz. However, it should be noted that the internal upsamling filter will affect the results.
+NISQA accepts .wav files with a duration of 5 to 12 seconds. The sample rate of the degraded speech files should be 48 kHz. NISQA can also upsample .wav files with sample rates of 8, 16, 32, and 44.1 kHz, however, the internal upsamling filter will affect the results.
 
 The resulting MOS values represent the predicted quality in a super-wideband context. This means the bandwidth limitation of a clean narrowband or wideband signal will be considered as quality degradation by the model.
 
 Please note that the model is still work in progress, if you notice unexpected behaviour for certain degradation conditions feel free to contact me: gabriel.mittag@tu-berlin.de
 
 ### Download
-[NISQA v0.4](https://github.com/gabrielmittag/NISQA/releases/download/v0.4/nisqa.zip)
+[NISQA v0.4](https://github.com/gabrielmittag/NISQA/releases/download/v0.4.1/nisqa.zip)
 
 ### Usage
 To output the quality of a degraded speech file use: `nisqa.exe "path_to_speech_file.wav"`
