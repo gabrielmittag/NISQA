@@ -20,7 +20,7 @@ The resulting MOS values represent the predicted quality in a super-wideband con
 Please note that the model is still work in progress, if you notice unexpected behaviour for certain degradation conditions feel free to contact me: gabriel.mittag@tu-berlin.de
 
 ### Download
-[NISQA v0.4.1](https://github.com/gabrielmittag/NISQA/releases/download/v0.4.1/nisqa.zip)
+[NISQA v0.4.2](https://github.com/gabrielmittag/NISQA/releases/download/v0.4.2/nisqa.zip)
 
 ### Usage
 To output the quality of a degraded speech file use: `nisqa.exe "path_to_speech_file.wav"`
