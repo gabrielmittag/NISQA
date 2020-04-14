@@ -7,10 +7,13 @@ Created on Wed Apr 1 2020
 @author: Gabriel Mittag, Quality and Usability Lab, TU Berlin
 """
 import os
+import datetime
+import time
+
 import librosa as lb
 import numpy as np
-import pandas as pd
-pd.options.mode.chained_assignment = None
+import pandas as pd; pd.options.mode.chained_assignment = None
+from tqdm import tqdm
 
 from scipy.stats import pearsonr
 from scipy.stats import spearmanr
@@ -19,6 +22,8 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import optim
+
 from torch.nn.utils.rnn import pad_packed_sequence
 from torch.nn.utils.rnn import pack_padded_sequence
 from torch.nn.utils.rnn import PackedSequence
@@ -26,7 +31,199 @@ from torch.nn.utils.rnn import PackedSequence
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
+#%% Training
 
+def fit_mos_packed(model, model_args, train_opts, train_ds, val_ds, dbs, dev):
+
+    if train_opts['parallel']:
+        model = nn.DataParallel(model)
+    model.to(dev)
+
+    # Runname and savepath  ---------------------------------------------------
+    now_str = datetime.datetime.now().strftime("%y%m%d_%H%M%S%f")
+    runname = train_opts['runname'] + '_' + now_str
+    model_folder = os.path.join(train_opts['main_folder'], 'models', runname)
+    resultspath = os.path.join(train_opts['main_folder'], 'results', runname)
+    os.mkdir(model_folder)
+    print(runname)
+
+    # Optimizer  -------------------------------------------------------------
+    opt = optim.Adam(model.parameters(), lr=train_opts['lr'])
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            opt,
+            'min',
+            verbose=True,
+            threshold=0.003,
+            patience=train_opts['lr_patience'])
+    
+    earlyStp = earlyStopper(train_opts['early_stop'])  
+
+    # Dataloader    -----------------------------------------------------------
+    train_dl = DataLoader(train_ds,
+                          batch_size=train_opts['bs'],
+                          shuffle=True,
+                          drop_last=False,
+                          num_workers=train_opts['num_workers'],
+                          pin_memory=False)    
+ 
+    # Start training loop   ---------------------------------------------------
+    print('--> start training')
+    tic_total = time.time()
+    for epoch in range(train_opts['epochs']):
+
+        tic_epoch = time.time()
+
+        # Train model    ------------------------------------------------------
+        model.train()
+        y_train_hat = np.zeros((len(train_ds), 1))
+        batch_cnt = 0
+        loss = 0.0
+
+        # Progress bar
+        if train_opts['verbose'] == 2:
+            pbar = tqdm(iterable=batch_cnt, total=len(train_dl), ascii=">—",
+                        bar_format='{bar} {percentage:3.0f}%, {n_fmt}/{total_fmt}, {elapsed}<{remaining}{postfix}')
+
+        for xb_spec_deg, yb_mos, (idx, n_wins) in train_dl:
+
+            # Estimate batch --------------------------------------------------
+            xb_spec_deg = xb_spec_deg.to(dev)
+            yb_mos = yb_mos.to(dev)
+            n_wins = n_wins.to(dev)
+
+            # Forward pass ----------------------------------------------------
+            yb_mos_hat = model(xb_spec_deg, n_wins)
+            y_train_hat[idx] = yb_mos_hat.detach().cpu().numpy().astype(dtype=float)
+
+            # Loss ------------------------------------------------------------
+            lossb = F.mse_loss(yb_mos_hat, yb_mos)
+                
+            # Backprop
+            lossb.backward()
+            opt.step()
+            opt.zero_grad()
+
+            # Update total loss
+            loss += lossb.item()
+            batch_cnt += 1
+
+            if train_opts['verbose'] == 2:
+                pbar.set_postfix(loss=lossb.item())
+                pbar.update()
+
+        if train_opts['verbose'] == 2:
+            pbar.close()
+
+        loss = loss/batch_cnt
+
+        # Evaluate  -----------------------------------------------------------            
+        train_ds.dfile['y_hat'] = y_train_hat
+        db_results_train, r_train = eval_results(
+            train_ds.dfile,
+            target_mos = train_opts['target_mos'],
+            do_print=False,
+            do_plot=False)
+        
+        val_ds.dfile['y_hat'] = predict_mos(model, val_ds, train_opts['eval_bs'], dev, num_workers=train_opts['num_workers'])
+        db_results, r = eval_results(
+            val_ds.dfile,
+            target_mos = train_opts['target_mos'],
+            do_print=False,
+            do_plot=False)
+
+        # update scheduler ---------------------------------------------------
+        scheduler.step(loss)
+        early_stp = earlyStp.step(r) 
+        
+        # Print    ------------------------------------------------------------
+        toc_epoch = time.time() - tic_epoch
+        if train_opts['verbose'] > 0:
+            print('ep {}: sec {:0.0f} es {} lr {:0.0e} loss {:0.4f} r_train {:0.2f} rmse_train {:0.2f} val_r {:0.2f} val_rmse {:0.2f}'
+                  .format(epoch+1, toc_epoch, earlyStp.cnt, get_lr(opt), loss, r_train['r_p'], r_train['rmse'], r['r_p'], r['rmse']))
+
+        # Save model    -------------------------------------------------------
+        filename = runname + '__' + ('ep_{:03d}'.format(epoch+1)) + '.tar'
+        model_path = model_folder + filename
+        results = {
+            'runname': runname,
+            'filename': filename,
+            'epoch': epoch+1,
+            'loss': loss,
+            **r,
+            **train_opts,
+            'finished': False
+            }
+
+        if epoch==0:
+            results_hist = pd.DataFrame(results, index=[0])
+        else:
+            results_hist.loc[epoch] = results
+
+        if hasattr(model, 'module'):
+            state_dict = model.module.state_dict()
+            model_name = model.module.name
+        else:
+            state_dict = model.state_dict()
+            model_name = model.name
+
+        torch_dict = {
+            'runname': runname,
+            'epoch': epoch+1,
+            'train_opts': train_opts,
+            'model_args': model_args,
+            'model_state_dict': state_dict,
+            'optimizer_state_dict': opt.state_dict(),
+            'db_results': db_results,
+            'results': results,
+            'results_hist': results_hist,
+            'model_name': model_name,
+            'dbs': dbs
+            }
+
+        torch.save(torch_dict, model_path)
+        results_hist.to_pickle(resultspath+'__results.pd')
+
+        # Early stopping    -----------------------------------------------
+        if early_stp:
+            print('--> Early stoping best_r_p {:0.2f} best_rmse {:0.2f}'
+                  .format(earlyStp.best_r_p, earlyStp.best_rmse))
+            results_hist['finished'] = True
+            results_hist.to_pickle(resultspath+'__results.pd')
+            return results_hist
+        
+    print('--> training done %0.0f sec' % (time.time() - tic_total))
+    results_hist['finished'] = True
+    results_hist.to_pickle(resultspath+'__results.pd')
+    return results_hist
+
+
+def get_lr(optimizer):
+    for param_group in optimizer.param_groups:
+        return param_group['lr']
+
+class earlyStopper(object):  
+    def __init__(self, patience):
+        self.best_rmse = 1e10
+        self.best_r_p = -1e10
+        self.cnt = -1
+        self.patience = patience
+        
+    def step(self, r):
+        if r['r_p'] > self.best_r_p:
+            self.best_r_p = r['r_p']
+            self.cnt = -1   
+        if r['rmse'] < self.best_rmse:
+            self.best_rmse = r['rmse']
+            self.cnt = -1                  
+        self.cnt += 1 
+
+        if self.cnt >= self.patience:
+            stop_early = True
+            return stop_early
+        else:
+            stop_early = False
+            return stop_early
+        
 #%% Models 
 class CNN(nn.Module):
 
@@ -150,12 +347,11 @@ class LSTM_Attention_SE(nn.Module):
                 att_method=None,
                 att_h=128,
                 post_lstm_dropout=0,
-                scale_mos=None
                 ):
             
         super().__init__()
 
-        self.name = ['LSTM_Attention_Fuse', model_CNN.name]
+        self.name = ['LSTM_Attention_SE', model_CNN.name]
 
         self.n_cnn_feat = n_cnn_feat
         self.lstm_h1 = lstm_h1
@@ -177,8 +373,6 @@ class LSTM_Attention_SE(nn.Module):
         self.lstm2_dropout = lstm2_dropout
         
         self.post_lstm_dropout = post_lstm_dropout
-        
-        self.scale_mos = scale_mos
         
         if self.bidirectional:
             self.num_directions = 2
@@ -230,16 +424,7 @@ class LSTM_Attention_SE(nn.Module):
                     in_features=2*self.num_directions*self.lstm2.hidden_size,
                     out_features=1)
             
-        self.mos_scale = nn.Linear(in_features=1, out_features=1)
-        with torch.no_grad():
-            self.mos_scale.weight[0,0] = torch.tensor(self.scale_mos[1])
-            self.mos_scale.bias[0] = torch.tensor(self.scale_mos[0])
-            
         self.apply_att = Apply_Soft_Attention()
-               
-            
-        if self.pool_size>1:
-            self.pool = LSTM_Maxpool(self.pool_size)
 
         self._init_weights()
 
@@ -290,10 +475,6 @@ class LSTM_Attention_SE(nn.Module):
                                    padding_value=0.0,
                                    total_length=self.max_length)
         
-        # Pooling -------------------------------------------------------------
-        if self.pool_size>1:
-            x, n_wins = self.pool(x, n_wins)
-        
         # Cat and fuse LSTM outputs   -----------------------------------------
         x_packed = pack_padded_sequence(
                 x,
@@ -310,7 +491,6 @@ class LSTM_Attention_SE(nn.Module):
         
         
         # Attention -----------------------------------------------------------
-
         if self.att_method is None:
             x = last_h     
         
@@ -379,14 +559,10 @@ class LSTM_Attention_SE(nn.Module):
                                 
         else:
             raise NotImplementedError        
-        
             
         # Predict MOS ---------------------------------------------------------
         x = F.dropout(x, self.post_lstm_dropout)
         y_mos_hat = self.linear(x)
-        
-        with torch.no_grad():
-            y_mos_hat = self.mos_scale(y_mos_hat)
         
         return y_mos_hat
         
@@ -441,16 +617,6 @@ class Apply_Soft_Attention(torch.nn.Module):
     def forward(self, y, att):        
         y = torch.bmm(att, y)       
         return y        
-    
-class LSTM_Maxpool(torch.nn.Module):
-    def __init__(self, pool_size):
-        super().__init__()
-        self.pool_size = pool_size
-    def forward(self, x, n_wins):        
-        x = F.max_pool1d(x.transpose(2,1), self.pool_size).transpose(2,1)
-        n_wins = n_wins//self.pool_size
-        return x, n_wins            
-    
 
 #%% Dataset
 class NISQA_Dataset(Dataset):
@@ -474,21 +640,32 @@ class NISQA_Dataset(Dataset):
         self.seg_length = seg_length
         self.max_length = max_length
 
+        self.to_memory = False
+        if to_memory:
+            self._to_memory()
+
+
+    def _to_memory(self):
+        self.mem_list = [out for out in tqdm(self, total=len(self)) ]
+        self.to_memory = True
 
     def __getitem__(self, index):
         assert isinstance(index, int), 'index must be integer (no slice)'
 
-        # Get MOS
-        y_mos = self.dfile[self.mos].iloc[index].reshape(-1).astype('float32')
+        if self.to_memory:
+            return self.mem_list[index]
+        else:
+            # Get MOS
+            y_mos = self.dfile[self.mos].iloc[index].reshape(-1).astype('float32')
+            
+            # Load spec    
+            file_path = os.path.join(self.data_dir, self.dfile[self.filename].iloc[index])
+            spec = get_librosa_melspec(file_path)  
+    
+            # Segment specs   
+            x_spec_seg, n_wins = segment_specs(spec, self.seg_length, self.max_length)    
         
-        # Load spec    
-        file_path = os.path.join(self.data_dir, self.dfile[self.filename].iloc[index])
-        spec = get_librosa_melspec(file_path)  
-
-        # Segment specs   
-        x_spec_seg, n_wins = segment_specs(spec, self.seg_length, self.max_length)    
-        
-        return x_spec_seg, y_mos, (index, n_wins)
+            return x_spec_seg, y_mos, (index, n_wins)
 
     def __len__(self):
         return len(self.dfile)
