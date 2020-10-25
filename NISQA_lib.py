@@ -1,245 +1,692 @@
 # -*- coding: utf-8 -*-
 """
-NISQA Library v0.5
-
-Created on Wed Apr 1 2020
-
-@author: Gabriel Mittag, Quality and Usability Lab, TU Berlin
+@author: Gabriel Mittag, TU-Berlin
 """
+
 import os
-import datetime
-import time
+import multiprocessing
+import copy
+import math
 
 import librosa as lb
 import numpy as np
 import pandas as pd; pd.options.mode.chained_assignment = None
-from tqdm import tqdm
+import matplotlib.pyplot as plt
 
+from tqdm import tqdm
 from scipy.stats import pearsonr
 from scipy.stats import spearmanr
-import matplotlib.pyplot as plt
+from scipy.optimize import minimize
+from scipy.optimize import least_squares
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch import optim
-
+from torch.nn.utils.rnn import pack_sequence
 from torch.nn.utils.rnn import pad_packed_sequence
 from torch.nn.utils.rnn import pack_padded_sequence
 from torch.nn.utils.rnn import PackedSequence
-
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
-#%% Training
 
-def fit_mos_packed(model, model_args, train_opts, train_ds, val_ds, dbs, dev):
-
-    if train_opts['parallel']:
-        model = nn.DataParallel(model)
-    model.to(dev)
-
-    # Runname and savepath  ---------------------------------------------------
-    now_str = datetime.datetime.now().strftime("%y%m%d_%H%M%S%f")
-    runname = train_opts['runname'] + '_' + now_str
-    model_folder = os.path.join(train_opts['main_folder'], 'models', runname)
-    resultspath = os.path.join(train_opts['main_folder'], 'results', runname)
-    os.mkdir(model_folder)
-    print(runname)
-
-    # Optimizer  -------------------------------------------------------------
-    opt = optim.Adam(model.parameters(), lr=train_opts['lr'])
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            opt,
-            'min',
-            verbose=True,
-            threshold=0.003,
-            patience=train_opts['lr_patience'])
+#%% Models
+class NISQA(nn.Module):
+    def __init__(self,
+            ms_seg_length=15,
+            ms_n_mels=48,
+            
+            cnn_model='adapt',
+            cnn_c_out_1=16, 
+            cnn_c_out_2=32,
+            cnn_c_out_3=64,
+            cnn_kernel_size=3, 
+            cnn_dropout=0.2,
+            cnn_pool_1=[24,7],
+            cnn_pool_2=[12,5],
+            cnn_pool_3=[6,3],  
+            cnn_fc_out_h=None,     
+              
+            td='self_att',
+            td_sa_d_model=64,
+            td_sa_nhead=1,
+            td_sa_pool_size=None,
+            td_sa_pos_enc=None,
+            td_sa_num_layers=2,
+            td_sa_h=64,
+            td_sa_dropout=0.1,
+            td_lstm_h=128,
+            td_lstm_num_layers=1,
+            td_lstm_dropout=0,
+            td_lstm_bidirectional=True,
+            
+            td_2='skip',
+            td_2_sa_d_model=None,
+            td_2_sa_nhead=None,
+            td_2_sa_pool_size=None,
+            td_2_sa_pos_enc=None,
+            td_2_sa_num_layers=None,
+            td_2_sa_h=None,
+            td_2_sa_dropout=None,
+            td_2_lstm_h=None,
+            td_2_lstm_num_layers=None,
+            td_2_lstm_dropout=None,
+            td_2_lstm_bidirectional=None,            
+            
+            pool='att',
+            pool_output_size=1,
+            pool_att_h=128,
+            pool_att_dropout=0.1,
+               
+            ):
+        
+        super().__init__()
     
-    earlyStp = earlyStopper(train_opts['early_stop'])  
+        self.name = 'NISQA'
+        
+        self.cnn = CNN(
+            cnn_model,
+            ms_seg_length=ms_seg_length,
+            ms_n_mels=ms_n_mels,
+            c_out_1=cnn_c_out_1, 
+            c_out_2=cnn_c_out_2,
+            c_out_3=cnn_c_out_3,
+            kernel_size=cnn_kernel_size, 
+            dropout=cnn_dropout,
+            pool_1=cnn_pool_1,
+            pool_2=cnn_pool_2,
+            pool_3=cnn_pool_3,
+            fc_out_h=cnn_fc_out_h,   
+            )        
+        
+        self.time_dependency = TimeDependency(
+            input_size=self.cnn.model.fan_out,
+            td=td,
+            sa_d_model=td_sa_d_model,
+            sa_nhead=td_sa_nhead,
+            sa_pool_size=td_sa_pool_size,
+            sa_pos_enc=td_sa_pos_enc,
+            sa_num_layers=td_sa_num_layers,
+            sa_h=td_sa_h,
+            sa_dropout=td_sa_dropout,
+            lstm_h=td_lstm_h,
+            lstm_num_layers=td_lstm_num_layers,
+            lstm_dropout=td_lstm_dropout,
+            lstm_bidirectional=td_lstm_bidirectional
+            )
+        
+        
+        self.time_dependency_2 = TimeDependency(
+            input_size=self.time_dependency.fan_out,
+            td=td_2,
+            sa_d_model=td_2_sa_d_model,
+            sa_nhead=td_2_sa_nhead,
+            sa_pool_size=td_2_sa_pool_size,
+            sa_pos_enc=td_2_sa_pos_enc,
+            sa_num_layers=td_2_sa_num_layers,
+            sa_h=td_2_sa_h,
+            sa_dropout=td_2_sa_dropout,
+            lstm_h=td_2_lstm_h,
+            lstm_num_layers=td_2_lstm_num_layers,
+            lstm_dropout=td_2_lstm_dropout,
+            lstm_bidirectional=td_2_lstm_bidirectional
+            )        
+        
+        
+        self.pool = Pooling(
+            self.time_dependency_2.fan_out,
+            output_size=pool_output_size,
+            pool=pool,
+            att_h=pool_att_h,
+            att_dropout=pool_att_dropout,
+            )                 
 
-    # Dataloader    -----------------------------------------------------------
-    train_dl = DataLoader(train_ds,
-                          batch_size=train_opts['bs'],
-                          shuffle=True,
-                          drop_last=False,
-                          num_workers=train_opts['num_workers'],
-                          pin_memory=False)    
- 
-    # Start training loop   ---------------------------------------------------
-    print('--> start training')
-    tic_total = time.time()
-    for epoch in range(train_opts['epochs']):
+    def forward(self, x, n_wins):
 
-        tic_epoch = time.time()
+        x = self.cnn(x, n_wins)
+        x, n_wins = self.time_dependency(x, n_wins)
+        x, n_wins = self.time_dependency_2(x, n_wins)
+        x = self.pool(x, n_wins)
+        
+        return x
+    
 
-        # Train model    ------------------------------------------------------
-        model.train()
-        y_train_hat = np.zeros((len(train_ds), 1))
-        batch_cnt = 0
-        loss = 0.0
 
-        # Progress bar
-        if train_opts['verbose'] == 2:
-            pbar = tqdm(iterable=batch_cnt, total=len(train_dl), ascii=">—",
-                        bar_format='{bar} {percentage:3.0f}%, {n_fmt}/{total_fmt}, {elapsed}<{remaining}{postfix}')
+class NISQA_DIM(nn.Module):
+    def __init__(self,
+            ms_seg_length=15,
+            ms_n_mels=48,
+            
+            cnn_model='adapt',
+            cnn_c_out_1=16, 
+            cnn_c_out_2=32,
+            cnn_c_out_3=64,
+            cnn_kernel_size=3, 
+            cnn_dropout=0.2,
+            cnn_pool_1=[24,7],
+            cnn_pool_2=[12,5],
+            cnn_pool_3=[6,3],  
+            cnn_fc_out_h=None,     
+              
+            td='self_att',
+            td_sa_d_model=64,
+            td_sa_nhead=1,
+            td_sa_pool_size=None,
+            td_sa_pos_enc=None,
+            td_sa_num_layers=2,
+            td_sa_h=64,
+            td_sa_dropout=0.1,
+            td_lstm_h=128,
+            td_lstm_num_layers=1,
+            td_lstm_dropout=0,
+            td_lstm_bidirectional=True,
+            
+            td_2='skip',
+            td_2_sa_d_model=None,
+            td_2_sa_nhead=None,
+            td_2_sa_pool_size=None,
+            td_2_sa_pos_enc=None,
+            td_2_sa_num_layers=None,
+            td_2_sa_h=None,
+            td_2_sa_dropout=None,
+            td_2_lstm_h=None,
+            td_2_lstm_num_layers=None,
+            td_2_lstm_dropout=None,
+            td_2_lstm_bidirectional=None,               
 
-        for xb_spec_deg, yb_mos, (idx, n_wins) in train_dl:
+            pool='att',
+            pool_output_size=1,
+            pool_att_h=128,
+            pool_att_dropout=0.1,
+            
+            ):
+        
+        super().__init__()
+    
+        self.name = 'NISQA'
+        
+        self.cnn = CNN(
+            cnn_model,
+            ms_seg_length=ms_seg_length,
+            ms_n_mels=ms_n_mels,
+            c_out_1=cnn_c_out_1, 
+            c_out_2=cnn_c_out_2,
+            c_out_3=cnn_c_out_3,
+            kernel_size=cnn_kernel_size, 
+            dropout=cnn_dropout,
+            pool_1=cnn_pool_1,
+            pool_2=cnn_pool_2,
+            pool_3=cnn_pool_3,
+            fc_out_h=cnn_fc_out_h,   
+            )        
+        
+        self.time_dependency = TimeDependency(
+            input_size=self.cnn.model.fan_out,
+            td=td,
+            sa_d_model=td_sa_d_model,
+            sa_nhead=td_sa_nhead,
+            sa_pool_size=td_sa_pool_size,
+            sa_pos_enc=td_sa_pos_enc,
+            sa_num_layers=td_sa_num_layers,
+            sa_h=td_sa_h,
+            sa_dropout=td_sa_dropout,
+            lstm_h=td_lstm_h,
+            lstm_num_layers=td_lstm_num_layers,
+            lstm_dropout=td_lstm_dropout,
+            lstm_bidirectional=td_lstm_bidirectional
+            )
+        
+        pool = Pooling(
+            self.time_dependency.fan_out,
+            output_size=pool_output_size,
+            pool=pool,
+            att_h=pool_att_h,
+            att_dropout=pool_att_dropout,
+            )         
+        
+        
+        self.pool_layers = self._get_clones(pool, 5)
 
-            # Estimate batch --------------------------------------------------
-            xb_spec_deg = xb_spec_deg.to(dev)
-            yb_mos = yb_mos.to(dev)
-            n_wins = n_wins.to(dev)
+        
+    def _get_clones(self, module, N):
+        return nn.ModuleList([copy.deepcopy(module) for i in range(N)])        
+        
 
-            # Forward pass ----------------------------------------------------
-            yb_mos_hat = model(xb_spec_deg, n_wins)
-            y_train_hat[idx] = yb_mos_hat.detach().cpu().numpy().astype(dtype=float)
+    def forward(self, x, n_wins):
 
-            # Loss ------------------------------------------------------------
-            lossb = F.mse_loss(yb_mos_hat, yb_mos)
+        x = self.cnn(x, n_wins)
+        x, n_wins = self.time_dependency(x, n_wins)
+        
+        out = [mod(x, n_wins) for mod in self.pool_layers]
+        out = torch.cat(out, dim=1)
+
+        return out
+
+
+    
+class NISQA_DE(nn.Module):
+    def __init__(self,
+            ms_seg_length=15,
+            ms_n_mels=48,
+            
+            cnn_model='adapt',
+            cnn_c_out_1=16, 
+            cnn_c_out_2=32,
+            cnn_c_out_3=64,
+            cnn_kernel_size=3, 
+            cnn_dropout=0.2,
+            cnn_pool_1=[24,7],
+            cnn_pool_2=[12,5],
+            cnn_pool_3=[6,3],  
+            cnn_fc_out_h=None,     
+              
+            td='self_att',
+            td_sa_d_model=64,
+            td_sa_nhead=1,
+            td_sa_pool_size=None,
+            td_sa_pos_enc=None,
+            td_sa_num_layers=2,
+            td_sa_h=64,
+            td_sa_dropout=0.1,
+            td_lstm_h=128,
+            td_lstm_num_layers=1,
+            td_lstm_dropout=0,
+            td_lstm_bidirectional=True,
+            
+            td_2='skip',
+            td_2_sa_d_model=None,
+            td_2_sa_nhead=None,
+            td_2_sa_pool_size=None,
+            td_2_sa_pos_enc=None,
+            td_2_sa_num_layers=None,
+            td_2_sa_h=None,
+            td_2_sa_dropout=None,
+            td_2_lstm_h=None,
+            td_2_lstm_num_layers=None,
+            td_2_lstm_dropout=None,
+            td_2_lstm_bidirectional=None,               
+            
+            pool='att',
+            pool_output_size=1,
+            pool_att_h=128,
+            pool_att_dropout=0.1,
+            
+            de_align = 'dot',
+            de_align_apply = 'hard',
+            de_align_dim = None,
+            de_fuse_dim = None,
+            de_fuse = True,         
+               
+            ):
+        
+        super().__init__()
+    
+        self.name = 'NISQA'
+        
+        self.cnn = CNN(
+            cnn_model,
+            ms_seg_length=ms_seg_length,
+            ms_n_mels=ms_n_mels,
+            c_out_1=cnn_c_out_1, 
+            c_out_2=cnn_c_out_2,
+            c_out_3=cnn_c_out_3,
+            kernel_size=cnn_kernel_size, 
+            dropout=cnn_dropout,
+            pool_1=cnn_pool_1,
+            pool_2=cnn_pool_2,
+            pool_3=cnn_pool_3,
+            fc_out_h=cnn_fc_out_h,   
+            )        
+        
+        self.time_dependency = TimeDependency(
+            input_size=self.cnn.model.fan_out,
+            td=td,
+            sa_d_model=td_sa_d_model,
+            sa_nhead=td_sa_nhead,
+            sa_pool_size=td_sa_pool_size,
+            sa_pos_enc=td_sa_pos_enc,
+            sa_num_layers=td_sa_num_layers,
+            sa_h=td_sa_h,
+            sa_dropout=td_sa_dropout,
+            lstm_h=td_lstm_h,
+            lstm_num_layers=td_lstm_num_layers,
+            lstm_dropout=td_lstm_dropout,
+            lstm_bidirectional=td_lstm_bidirectional
+            )
+        
+        self.align = Attention(
+             de_align, 
+             de_align_apply,
+             q_dim=self.time_dependency.fan_out,
+             y_dim=self.time_dependency.fan_out,
+             att_dim=de_align_dim,                
+            )
                 
-            # Backprop
-            lossb.backward()
-            opt.step()
-            opt.zero_grad()
-
-            # Update total loss
-            loss += lossb.item()
-            batch_cnt += 1
-
-            if train_opts['verbose'] == 2:
-                pbar.set_postfix(loss=lossb.item())
-                pbar.update()
-
-        if train_opts['verbose'] == 2:
-            pbar.close()
-
-        loss = loss/batch_cnt
-
-        # Evaluate  -----------------------------------------------------------            
-        train_ds.dfile['y_hat'] = y_train_hat
-        db_results_train, r_train = eval_results(
-            train_ds.dfile,
-            target_mos = train_opts['target_mos'],
-            do_print=False,
-            do_plot=False)
         
-        val_ds.dfile['y_hat'] = predict_mos(model, val_ds, train_opts['eval_bs'], dev, num_workers=train_opts['num_workers'])
-        db_results, r = eval_results(
-            val_ds.dfile,
-            target_mos = train_opts['target_mos'],
-            do_print=False,
-            do_plot=False)
-
-        # update scheduler ---------------------------------------------------
-        scheduler.step(loss)
-        early_stp = earlyStp.step(r) 
+        self.fuse = Fusion(
+            in_feat=self.time_dependency.fan_out,
+            fuse_dim=de_fuse_dim, 
+            fuse=de_fuse,
+            )             
         
-        # Print    ------------------------------------------------------------
-        toc_epoch = time.time() - tic_epoch
-        if train_opts['verbose'] > 0:
-            print('ep {}: sec {:0.0f} es {} lr {:0.0e} loss {:0.4f} r_train {:0.2f} rmse_train {:0.2f} val_r {:0.2f} val_rmse {:0.2f}'
-                  .format(epoch+1, toc_epoch, earlyStp.cnt, get_lr(opt), loss, r_train['r_p'], r_train['rmse'], r['r_p'], r['rmse']))
-
-        # Save model    -------------------------------------------------------
-        filename = runname + '__' + ('ep_{:03d}'.format(epoch+1)) + '.tar'
-        model_path = model_folder + filename
-        results = {
-            'runname': runname,
-            'filename': filename,
-            'epoch': epoch+1,
-            'loss': loss,
-            **r,
-            **train_opts,
-            'finished': False
-            }
-
-        if epoch==0:
-            results_hist = pd.DataFrame(results, index=[0])
-        else:
-            results_hist.loc[epoch] = results
-
-        if hasattr(model, 'module'):
-            state_dict = model.module.state_dict()
-            model_name = model.module.name
-        else:
-            state_dict = model.state_dict()
-            model_name = model.name
-
-        torch_dict = {
-            'runname': runname,
-            'epoch': epoch+1,
-            'train_opts': train_opts,
-            'model_args': model_args,
-            'model_state_dict': state_dict,
-            'optimizer_state_dict': opt.state_dict(),
-            'db_results': db_results,
-            'results': results,
-            'results_hist': results_hist,
-            'model_name': model_name,
-            'dbs': dbs
-            }
-
-        torch.save(torch_dict, model_path)
-        results_hist.to_pickle(resultspath+'__results.pd')
-
-        # Early stopping    -----------------------------------------------
-        if early_stp:
-            print('--> Early stoping best_r_p {:0.2f} best_rmse {:0.2f}'
-                  .format(earlyStp.best_r_p, earlyStp.best_rmse))
-            results_hist['finished'] = True
-            results_hist.to_pickle(resultspath+'__results.pd')
-            return results_hist
+        self.time_dependency_2 = TimeDependency(
+            input_size=self.fuse.fan_out,
+            td=td_2,
+            sa_d_model=td_2_sa_d_model,
+            sa_nhead=td_2_sa_nhead,
+            sa_pool_size=td_2_sa_pool_size,
+            sa_pos_enc=td_2_sa_pos_enc,
+            sa_num_layers=td_2_sa_num_layers,
+            sa_h=td_2_sa_h,
+            sa_dropout=td_2_sa_dropout,
+            lstm_h=td_2_lstm_h,
+            lstm_num_layers=td_2_lstm_num_layers,
+            lstm_dropout=td_2_lstm_dropout,
+            lstm_bidirectional=td_2_lstm_bidirectional
+            )                
         
-    print('--> training done %0.0f sec' % (time.time() - tic_total))
-    results_hist['finished'] = True
-    results_hist.to_pickle(resultspath+'__results.pd')
-    return results_hist
+        self.pool = Pooling(
+            self.time_dependency_2.fan_out,
+            output_size=pool_output_size,
+            pool=pool,
+            att_h=pool_att_h,
+            att_dropout=pool_att_dropout,
+            )                 
 
-
-def get_lr(optimizer):
-    for param_group in optimizer.param_groups:
-        return param_group['lr']
-
-class earlyStopper(object):  
-    def __init__(self, patience):
-        self.best_rmse = 1e10
-        self.best_r_p = -1e10
-        self.cnt = -1
-        self.patience = patience
         
-    def step(self, r):
-        if r['r_p'] > self.best_r_p:
-            self.best_r_p = r['r_p']
-            self.cnt = -1   
-        if r['rmse'] < self.best_rmse:
-            self.best_rmse = r['rmse']
-            self.cnt = -1                  
-        self.cnt += 1 
+    def _split_ref_deg(self, x, n_wins):
+        (x, y) = torch.chunk(x, 2, dim=2)        
+        (n_wins_x, n_wins_y) = torch.chunk(n_wins, 2, dim=1)
+        n_wins_x = n_wins_x.view(-1)
+        n_wins_y = n_wins_y.view(-1)       
+        return x, y, n_wins_x, n_wins_y 
 
-        if self.cnt >= self.patience:
-            stop_early = True
-            return stop_early
-        else:
-            stop_early = False
-            return stop_early
+    def forward(self, x, n_wins):
         
-#%% Models 
+        x, y, n_wins_x, n_wins_y = self._split_ref_deg(x, n_wins)
+    
+        x = self.cnn(x, n_wins_x)
+        y = self.cnn(y, n_wins_y)
+        
+        x, n_wins_x = self.time_dependency(x, n_wins_x)
+        y, n_wins_y = self.time_dependency(y, n_wins_y)
+        
+        y = self.align(x, y, n_wins_y)
+        
+        x = self.fuse(x, y)
+        
+        x, n_wins_x = self.time_dependency_2(x, n_wins_x)
+        
+        x = self.pool(x, n_wins_x)
+        
+        return x
+    
+      
+
+      
+
+    
+#%% CNN
 class CNN(nn.Module):
+    def __init__(
+        self, 
+        cnn_model,
+        ms_seg_length=15,
+        ms_n_mels=48,
+        c_out_1=16, 
+        c_out_2=32,
+        c_out_3=64,
+        kernel_size=3, 
+        dropout=0.2,
+        pool_1=[24,7],
+        pool_2=[12,5],
+        pool_3=[6,3],
+        fc_out_h=None,        
+        ):
+        super().__init__()
+        
+        if cnn_model=='adapt':
+            self.model = AdaptCNN(
+                input_channels=1,
+                c_out_1=c_out_1, 
+                c_out_2=c_out_2,
+                c_out_3=c_out_3,
+                kernel_size=kernel_size, 
+                dropout=dropout,
+                pool_1=pool_1,
+                pool_2=pool_2,
+                pool_3=pool_3,
+                fc_out_h=fc_out_h,
+                )
+        elif cnn_model=='standard':
+            assert ms_n_mels == 48, "ms_n_mels is {} and should be 48, use adaptive model or change ms_n_mels".format(ms_n_mels)
+            assert ms_seg_length == 15, "ms_seg_len is {} should be 15, use adaptive model or change ms_seg_len".format(ms_seg_length)
+            assert ((kernel_size == 3) or (kernel_size == (3,3))), "cnn_kernel_size is {} should be 3, use adaptive model or change cnn_kernel_size".format(kernel_size)
+            self.model = StandardCNN(
+                input_channels=1,
+                c_out_1=c_out_1, 
+                c_out_2=c_out_2,
+                c_out_3=c_out_3,
+                kernel_size=kernel_size, 
+                dropout=dropout,
+                fc_out_h=fc_out_h,
+                )            
+        elif (cnn_model is None) or (cnn_model=='skip'):
+            self.model = SkipCNN(ms_seg_length, ms_n_mels, fc_out_h)
+        else:
+            raise NotImplementedError('CNN model not available')                        
+        
+    def forward(self, x, n_wins):
+        (bs, length, channels, height, width) = x.shape
+        x_packed = pack_padded_sequence(
+                x,
+                n_wins,
+                batch_first=True,
+                enforce_sorted=False
+                )     
+        x = self.model(x_packed.data) 
+        x = PackedSequence(
+                x,
+                batch_sizes = x_packed.batch_sizes,
+                sorted_indices = x_packed.sorted_indices,
+                unsorted_indices = x_packed.unsorted_indices
+                )
+        x, _ = pad_packed_sequence(
+            x, 
+            batch_first=True, 
+            padding_value=0.0,
+            total_length=n_wins.max())     
+        return x    
 
-    def __init__(self, input_channels, num_k, kernel_size, pool_size, dropout_rate, fc_out_h):
+class SkipCNN(nn.Module):
+    def __init__(
+        self, 
+        cnn_seg_length,
+        ms_n_mels,
+        fc_out_h
+        ):
         super().__init__()
 
-        self.name = 'CNN'
+        self.name = 'No_CNN'
+        self.cnn_seg_length = cnn_seg_length
+        self.ms_n_mels = ms_n_mels
+        self.fan_in = cnn_seg_length*ms_n_mels
+        
+        if fc_out_h is not None:
+            self.linear = nn.Linear(self.fan_out, fc_out_h)
+            self.fan_out = fc_out_h
+        else:
+            self.linear = nn.Identity()
+            self.fan_out = self.fan_in
+        
+    def forward(self, x):
+        x = x.view(-1, self.fan_out)
+        x = self.linear(x)
+        return x    
+    
+    
+    
+class AdaptCNN(nn.Module):
+    def __init__(self, 
+                 input_channels,
+                 c_out_1, 
+                 c_out_2,
+                 c_out_3,
+                 kernel_size, 
+                 dropout,
+                 pool_1,
+                 pool_2,
+                 pool_3,
+                 fc_out_h=20,
+                 ):
+        
+        super().__init__()
+        self.name = 'CNN_adapt'
 
         self.input_channels = input_channels
-        self.num_k = num_k
+        self.c_out_1 = c_out_1
+        self.c_out_2 = c_out_2
+        self.c_out_3 = c_out_3
         self.kernel_size = kernel_size
-        self.pool_size = pool_size
-        self.dropout_rate = dropout_rate
+        self.pool_1 = pool_1
+        self.pool_2 = pool_2
+        self.pool_3 = pool_3
+        self.dropout_rate = dropout
         self.fc_out_h = fc_out_h
 
-        self.dropout = nn.Dropout2d(p=dropout_rate)
+        self.dropout = nn.Dropout2d(p=self.dropout_rate)
+        
+        if isinstance(self.kernel_size, int):
+            self.kernel_size = (self.kernel_size, self.kernel_size)
+            
+        # Set kernel width of last conv layer to last pool width to 
+        # downsample width to one.
+        self.kernel_size_last = (self.kernel_size[0], self.pool_3[1])
+            
+        # kernel_size[1]=1 can be used for seg_length=1 -> corresponds to 
+        # 1D conv layer, no width padding needed.
+        if self.kernel_size[1] == 1:
+            self.cnn_pad = (1,0)
+        else:
+            self.cnn_pad = (1,1)   
+            
+        self.conv1 = nn.Conv2d(
+                self.input_channels,
+                self.c_out_1,
+                self.kernel_size,
+                padding = self.cnn_pad)
+
+        self.bn1 = nn.BatchNorm2d( self.conv1.out_channels )
+
+        self.conv2 = nn.Conv2d(
+                self.conv1.out_channels,
+                self.c_out_2,
+                self.kernel_size,
+                padding = self.cnn_pad)
+
+        self.bn2 = nn.BatchNorm2d( self.conv2.out_channels )
+
+        self.conv3 = nn.Conv2d(
+                self.conv2.out_channels,
+                self.c_out_3,
+                self.kernel_size,
+                padding = self.cnn_pad)
+
+        self.bn3 = nn.BatchNorm2d( self.conv3.out_channels )
+
+        self.conv4 = nn.Conv2d(
+                self.conv3.out_channels,
+                self.c_out_3,
+                self.kernel_size,
+                padding = self.cnn_pad)
+
+        self.bn4 = nn.BatchNorm2d( self.conv4.out_channels )
+
+        self.conv5 = nn.Conv2d(
+                self.conv4.out_channels,
+                self.c_out_3,
+                self.kernel_size,
+                padding = self.cnn_pad)
+
+        self.bn5 = nn.BatchNorm2d( self.conv5.out_channels )
+
+        self.conv6 = nn.Conv2d(
+                self.conv5.out_channels,
+                self.c_out_3,
+                self.kernel_size_last,
+                padding = (1,0))
+
+        self.bn6 = nn.BatchNorm2d( self.conv6.out_channels )
+        
+        if self.fc_out_h:
+            self.fc = nn.Linear(self.conv6.out_channels * self.pool_3[0], self.fc_out_h)
+            self.fan_out = self.fc_out_h
+        else:
+            self.fan_out = (self.conv6.out_channels * self.pool_3[0])
+
+    def forward(self, x):
+        # print(x.shape)
+        x = F.relu( self.bn1( self.conv1(x) ) )
+        # print(x.shape)
+        x = F.adaptive_max_pool2d(x, output_size=(self.pool_1))
+        # print(x.shape)
+
+        x = F.relu( self.bn2( self.conv2(x) ) )
+        x = F.adaptive_max_pool2d(x, output_size=(self.pool_2))
+        # print(x.shape)
+        
+        x = self.dropout(x)
+        x = F.relu( self.bn3( self.conv3(x) ) )
+        # print(x.shape)
+        x = self.dropout(x)
+        x = F.relu( self.bn4( self.conv4(x) ) )
+        # print(x.shape)
+        x = F.adaptive_max_pool2d(x, output_size=(self.pool_3))
+        # print(x.shape)
+
+
+        x = self.dropout(x)
+        x = F.relu( self.bn5( self.conv5(x) ) )
+        # print(x.shape)
+        x = self.dropout(x)
+        x = F.relu( self.bn6( self.conv6(x) ) )
+        # print(x.shape)
+        x = x.view(-1, self.conv6.out_channels * self.pool_3[0])
+        # print(x.shape)
+        
+        if self.fc_out_h:
+            x = self.fc( x ) 
+        return x
+    
+
+class StandardCNN(nn.Module):
+    def __init__(
+        self, 
+        input_channels, 
+        c_out_1, 
+        c_out_2, 
+        c_out_3, 
+        kernel_size, 
+        dropout, 
+        fc_out_h=None
+        ):
+        super().__init__()
+
+        self.name = 'CNN_standard'
+
+        self.input_channels = input_channels
+        self.c_out_1 = c_out_1
+        self.c_out_2 = c_out_2
+        self.c_out_3 = c_out_3
+        self.kernel_size = kernel_size
+        self.pool_size = 2
+        self.dropout_rate = dropout
+        self.fc_out_h = fc_out_h
+
+        self.output_width = 2 # input width 15 pooled 3 times
+        self.output_height = 6 # input height 48 pooled 3 times
+
+        self.dropout = nn.Dropout2d(p=self.dropout_rate)
 
         self.pool_first = nn.MaxPool2d(
                 self.pool_size,
@@ -253,7 +700,7 @@ class CNN(nn.Module):
 
         self.conv1 = nn.Conv2d(
                 self.input_channels,
-                self.num_k,
+                self.c_out_1,
                 self.kernel_size,
                 padding = 1)
 
@@ -261,7 +708,7 @@ class CNN(nn.Module):
 
         self.conv2 = nn.Conv2d(
                 self.conv1.out_channels,
-                2 * self.num_k,
+                self.c_out_2,
                 self.kernel_size,
                 padding = 1)
 
@@ -270,7 +717,7 @@ class CNN(nn.Module):
 
         self.conv3 = nn.Conv2d(
                 self.conv2.out_channels,
-                4 * self.num_k,
+                self.c_out_3,
                 self.kernel_size,
                 padding = 1)
 
@@ -278,7 +725,7 @@ class CNN(nn.Module):
 
         self.conv4 = nn.Conv2d(
                 self.conv3.out_channels,
-                4 * self.num_k,
+                self.c_out_3,
                 self.kernel_size,
                 padding = 1)
 
@@ -286,7 +733,7 @@ class CNN(nn.Module):
 
         self.conv5 = nn.Conv2d(
                 self.conv4.out_channels,
-                4 * self.num_k,
+                self.c_out_3,
                 self.kernel_size,
                 padding = 1)
 
@@ -294,19 +741,21 @@ class CNN(nn.Module):
 
         self.conv6 = nn.Conv2d(
                 self.conv5.out_channels,
-                4 * self.num_k,
+                self.c_out_3,
                 self.kernel_size,
                 padding = 1)
         
         self.bn6 = nn.BatchNorm2d( self.conv6.out_channels )
-        self.fc = nn.Linear(self.conv6.out_channels *6*2, 768)
-        
-        if self.fc_out_h:
-            self.fc_out = nn.Linear(768, self.fc_out_h)
 
+        if self.fc_out_h:
+            self.fc_out = nn.Linear(self.conv6.out_channels * self.output_height * self.output_width, self.fc_out_h)
+            self.fan_out = self.fc_out_h
+        else:
+            self.fan_out = (self.conv6.out_channels * self.output_height * self.output_width)
+            
 
     def forward(self, x):
-
+        
         x = F.relu( self.bn1( self.conv1(x) ) )
         x = self.pool_first( x )
 
@@ -318,286 +767,516 @@ class CNN(nn.Module):
         x = self.dropout(x)
         x = F.relu( self.bn4( self.conv4(x) ) )
         x = self.pool( x )
-
+        
         x = self.dropout(x)
         x = F.relu( self.bn5( self.conv5(x) ) )
         x = self.dropout(x)
         
         x = F.relu( self.bn6( self.conv6(x) ) )
-        x = x.view(-1, self.conv6.out_channels *6*2)
-            
-        x = F.relu(self.fc_out( x ) )
+                
+        x = x.view(-1, self.conv6.out_channels * self.output_height * self.output_width) 
+                            
+        if self.fc_out_h:
+            x = self.fc_out( x )
 
         return x
-
-
-class LSTM_Attention_SE(nn.Module):
+    
+    
+    
+    
+#%% Time Dependency
+class TimeDependency(nn.Module):
     def __init__(self,
-                model_CNN,
-                n_cnn_feat=20,
-                lstm_h1=20,
-                lstm1_num_layers=1,
-                lstm1_dropout=0,
-                lstm_h2=125,
-                lstm2_num_layers=1,
-                lstm2_dropout=0,
-                bidirectional=True,
-                pool_size=1,
-                forget_bias=1,
-                att_method=None,
-                att_h=128,
-                post_lstm_dropout=0,
-                ):
-            
+                 input_size,
+                 td='self_att',
+                 sa_d_model=512,
+                 sa_nhead=8,
+                 sa_pool_size=3,
+                 sa_pos_enc=None,
+                 sa_num_layers=6,
+                 sa_h=2048,
+                 sa_dropout=0.1,
+                 lstm_h=128,
+                 lstm_num_layers=1,
+                 lstm_dropout=0,
+                 lstm_bidirectional=True,
+                 ):
         super().__init__()
-
-        self.name = ['LSTM_Attention_SE', model_CNN.name]
-
-        self.n_cnn_feat = n_cnn_feat
-        self.lstm_h1 = lstm_h1
-        self.lstm_h2 = lstm_h2
-        self.att_h = att_h
-       
-        self.bidirectional = bidirectional
-        self.pool_size = pool_size
         
-        self.att_method = att_method
-                
-        self.max_length = None
-        self.forget_bias = forget_bias
-        
-        self.lstm1_num_layers = lstm1_num_layers
-        self.lstm1_dropout = lstm1_dropout
-
-        self.lstm2_num_layers = lstm2_num_layers
-        self.lstm2_dropout = lstm2_dropout
-        
-        self.post_lstm_dropout = post_lstm_dropout
-        
-        if self.bidirectional:
-            self.num_directions = 2
+        if td=='self_att':
+            self.model = SelfAttention(
+                input_size=input_size,
+                d_model=sa_d_model,
+                nhead=sa_nhead,
+                pool_size=sa_pool_size,
+                pos_enc=sa_pos_enc,
+                num_layers=sa_num_layers,
+                sa_h=sa_h,
+                dropout=sa_dropout,
+                activation="relu"
+                )
+            self.fan_out = sa_d_model
+            
+        elif td=='lstm':
+            self.model = LSTM(
+                 input_size,
+                 lstm_h=lstm_h,
+                 num_layers=lstm_num_layers,
+                 dropout=lstm_dropout,
+                 bidirectional=lstm_bidirectional,
+                 )  
+            self.fan_out = self.model.fan_out
+            
+        elif (td is None) or (td=='skip'):
+            self.model = self._skip
+            self.fan_out = input_size
         else:
-            self.num_directions = 1      
-                    
-        self.cnn = model_CNN
-
-        self.lstm1 = nn.LSTM(
-                input_size = self.n_cnn_feat,
-                hidden_size = self.lstm_h1,
-                num_layers = self.lstm1_num_layers,
-                dropout = self.lstm1_dropout,
-                batch_first = True,
-                bidirectional = self.bidirectional)
-        
-        self.lstm2_in = self.num_directions*self.lstm_h1
-
-        self.lstm2 = nn.LSTM(
-                input_size = self.lstm2_in,
-                hidden_size = self.lstm_h2,
-                num_layers = self.lstm2_num_layers,
-                dropout = self.lstm2_dropout,
-                batch_first = True,
-                bidirectional = self.bidirectional)
-
-        if self.att_method=='output_only': 
-            self.att = nn.Linear(
-                    in_features=self.num_directions*self.lstm_h2,
-                    out_features=1)                  
+            raise NotImplementedError('Time dependency option not available')    
             
-            
-        elif self.att_method=='luong':
-            self.att = Att_Luong(
-                    q_dim=self.num_directions*self.lstm_h2, 
-                    y_dim=self.num_directions*self.lstm_h2,
-                    softmax=False) 
-            
-        elif self.att_method=='dot':
-            self.att = Att_Dot(softmax=False)
-
-
-        if self.att_method is None:
-            self.linear = nn.Linear(
-                    in_features=1*self.num_directions*self.lstm2.hidden_size,
-                    out_features=1)
-        else:
-            self.linear = nn.Linear(
-                    in_features=2*self.num_directions*self.lstm2.hidden_size,
-                    out_features=1)
-            
-        self.apply_att = Apply_Soft_Attention()
-
-        self._init_weights()
-
-    def _init_weights(self):
-        for name, param in self.named_parameters():
-          if 'bias' in name:
-             if 'lstm' in name:
-                 nn.init.constant_(param, 0)
-                 nn.init.constant_(param[len(param)//4:len(param)//2], self.forget_bias)
-          if 'weight' in name:
-              if '_ih_' in name:
-                  nn.init.kaiming_normal_(param)
-              if '_hh_' in name:
-                  nn.init.orthogonal_(param)
-                  
-                  
-    def _mask_attention(self, att, y, n_wins):
-        mask = torch.arange(y.shape[1])[None, :] < n_wins[:, None].to('cpu').to(torch.long)
-        att[~mask.unsqueeze(1)] = float("-Inf")
+    def _skip(self, x, n_wins):
+        return x, n_wins
 
     def forward(self, x, n_wins):
+        x, n_wins = self.model(x, n_wins)
+        return x, n_wins
 
-        bs = x.shape[0] 
-        n_wins = n_wins.view(-1)
-
-        x_packed = pack_padded_sequence(
-                x,
-                n_wins,
-                batch_first=True,
-                enforce_sorted=False
-                )
-
-
-        # CNN -----------------------------------------------------------------
-        x = self.cnn(x_packed.data)   
-        x_packed = PackedSequence(
-                x,
-                batch_sizes = x_packed.batch_sizes,
-                sorted_indices = x_packed.sorted_indices,
-                unsorted_indices = x_packed.unsorted_indices)
-
-
-        # First LSTM ----------------------------------------------------------
-        self.lstm1.flatten_parameters()
-        x_packed = self.lstm1(x_packed)[0]
-        x, _ = pad_packed_sequence(x_packed, 
-                                   batch_first=True, 
-                                   padding_value=0.0,
-                                   total_length=self.max_length)
+                
+class LSTM(nn.Module):
+    def __init__(self,
+                 input_size,
+                 lstm_h=128,
+                 num_layers=1,
+                 dropout=0.1,
+                 bidirectional=True
+                 ):
+        super().__init__()
         
-        # Cat and fuse LSTM outputs   -----------------------------------------
-        x_packed = pack_padded_sequence(
-                x,
-                n_wins,
-                batch_first=True,
-                enforce_sorted=False
-                )
-
-        # Second LSTM ---------------------------------------------------------
-        self.lstm2.flatten_parameters()
-        output, (last_h, _) = self.lstm2(x_packed)
-        last_h = last_h.view(self.lstm2_num_layers, self.num_directions, bs, self.lstm_h2)
-        last_h = last_h[-1,:].transpose(0,1).contiguous().view(bs, self.num_directions*self.lstm_h2)        
-        
-        
-        # Attention -----------------------------------------------------------
-        if self.att_method is None:
-            x = last_h     
-        
-        elif self.att_method=='mean':
-            output, _ = pad_packed_sequence(output, 
-                                       batch_first=True, 
-                                       padding_value=0.0,
-                                       total_length=self.max_length)
-
-            output = output.sum(1)
-            output = output.div(n_wins.to(torch.float).unsqueeze(1))
-            x = torch.cat((output, last_h), 1)   
+        self.lstm = nn.LSTM(
+                input_size = input_size,
+                hidden_size = lstm_h,
+                num_layers = num_layers,
+                dropout = dropout,
+                batch_first = True,
+                bidirectional = bidirectional
+                )      
             
-        elif self.att_method=='output_only':
-            
-            att = self.att(output.data) 
-            
-            att = PackedSequence(
-                    att,
-                    batch_sizes = x_packed.batch_sizes,
-                    sorted_indices = x_packed.sorted_indices,
-                    unsorted_indices = x_packed.unsorted_indices)            
-            
-            output, _ = pad_packed_sequence(output, 
-                                       batch_first=True, 
-                                       padding_value=0.0,
-                                       total_length=self.max_length)
-            
-            att, _ = pad_packed_sequence(att, 
-                                       batch_first=True, 
-                                       padding_value=float("-Inf"),
-                                       total_length=self.max_length)  
-            
-            att = att.transpose(2,1)
-            att = F.softmax(att, dim=2)            
-            
-            output = self.apply_att(output, att).squeeze(1)
-            x = torch.cat((output, last_h), 1)            
-            
-        
-        elif self.att_method=='luong':
-            
-            output, _ = pad_packed_sequence(output, 
-                                       batch_first=True, 
-                                       padding_value=0.0,
-                                       total_length=self.max_length)
-            x = last_h.unsqueeze(1)
-            att, sim = self.att(x, output)
-            self._mask_attention(att, output, n_wins)
-            att = F.softmax(att, dim=2)            
-            output = self.apply_att(output, att)   
-            x = torch.cat((output, x), 2).squeeze(1)    
-            
-        elif self.att_method=='dot':
-            
-            output, _ = pad_packed_sequence(output, 
-                                       batch_first=True, 
-                                       padding_value=0.0,
-                                       total_length=self.max_length)
-            x = last_h.unsqueeze(1)
-            att, sim = self.att(x, output)
-            self._mask_attention(att, output, n_wins)
-            att = F.softmax(att, dim=2)            
-            output = self.apply_att(output, att)   
-            x = torch.cat((output, x), 2).squeeze(1)                
-                                
+        if bidirectional:
+            num_directions = 2
         else:
-            raise NotImplementedError        
+            num_directions = 1                 
+        self.fan_out = num_directions*lstm_h
+
+    def forward(self, x, n_wins):
+        
+        x = pack_padded_sequence(
+                x,
+                n_wins,
+                batch_first=True,
+                enforce_sorted=False
+                )             
+        
+        self.lstm.flatten_parameters()
+        x = self.lstm(x)[0]
+        
+        x, _ = pad_packed_sequence(
+            x, 
+            batch_first=True, 
+            padding_value=0.0,
+            total_length=n_wins.max())          
+  
+        return x, n_wins
+
+
+
+class SelfAttention(nn.Module):
+    def __init__(self,
+                 input_size,
+                 d_model=512,
+                 nhead=8,
+                 pool_size=3,
+                 pos_enc=None,
+                 num_layers=6,
+                 sa_h=2048,
+                 dropout=0.1,
+                 activation="relu"
+                 ):
+        super().__init__()
+        
+        encoder_layer = SelfAttentionLayer(d_model, nhead, pool_size, sa_h, dropout, activation)
+        self.norm1 = nn.LayerNorm(d_model)
+        
+        self.linear = nn.Linear(input_size, d_model)
+        
+        self.layers = self._get_clones(encoder_layer, num_layers)
+        self.num_layers = num_layers
+        self.d_model = d_model
+        self.nhead = nhead      
+        
+        if pos_enc:
+            self.pos_encoder = PositionalEncoding(d_model, dropout)
+        else:
+            self.pos_encoder = nn.Identity()
             
-        # Predict MOS ---------------------------------------------------------
-        x = F.dropout(x, self.post_lstm_dropout)
-        y_mos_hat = self.linear(x)
+        self._reset_parameters()
         
-        return y_mos_hat
+    def _get_clones(self, module, N):
+        return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
+    
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, src, n_wins=None):            
+        src = self.linear(src)
+        output = src.transpose(1,0)
+        output = self.norm1(output)
+        output = self.pos_encoder(output)
         
+        for mod in self.layers:
+            output, n_wins = mod(output, n_wins=n_wins)
+        return output.transpose(1,0), n_wins
 
-#%% Predict
-def predict_mos(model, ds, bs, dev, num_workers=0):
+
+class SelfAttentionLayer(nn.Module):
+    def __init__(self, d_model, nhead, pool_size=1, sa_h=2048, dropout=0.1, activation="relu"):
+        super().__init__()
+        if pool_size is None:
+            pool_size = 1
+        self.pool_size = pool_size
+        
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        
+        self.linear1 = nn.Linear(d_model, sa_h)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(sa_h, d_model)
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        
+        if self.pool_size==1:
+            self.maxpool = nn.Identity()
+        else:
+            self.maxpool = nn.MaxPool1d(self.pool_size, ceil_mode=True)
+
+        self.activation = self._get_activation_fn(activation)
+        
+    def _get_activation_fn(self, activation):
+        if activation == "relu":
+            return F.relu
+        elif activation == "gelu":
+            return F.gelu                
+        
+    def forward(self, src, n_wins=None):
+        
+        if n_wins is not None:
+            mask = ~((torch.arange(src.shape[0])[None, :]).to(src.device) < n_wins[:, None].to(torch.long).to(src.device))
+        else:
+            mask = None
+        
+        src2 = self.self_attn(src, src, src, key_padding_mask=mask)[0]
+        src = src + self.dropout1(src2)
+        src = self.norm1(src)
+        src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
+        src = src + self.dropout2(src2)
+
+        src = self.maxpool(src.permute(1,2,0)).permute(2,0,1)
+        n_wins = torch.ceil(torch.true_divide(n_wins, self.pool_size)).to(torch.int)
+        
+        src = self.norm2(src)
+
+        return src, n_wins
     
-    dl = DataLoader(ds,
-                    batch_size=bs,
-                    num_workers=num_workers,
-                    shuffle=False,
-                    drop_last=False)
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model, dropout=0.1, max_len=3000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)    
     
-    model.eval()
-    with torch.no_grad():
-        y_hat = [[model(xb.to(dev), n_wins).cpu().numpy()] for xb, yb, (idx, n_wins) in dl]
+    
 
-    y_hat = np.concatenate( y_hat, axis=1 ).reshape(-1,1).astype(float)
+#%% Pooling
 
-    return y_hat
+class Pooling(nn.Module):
+    def __init__(self,
+                 d_input,
+                 output_size=1,
+                 pool='att',
+                 att_h=None,
+                 att_dropout=0,
+                 ):
+        super().__init__()
+        
+        if pool=='att':
+            if att_h is None:
+                self.model = PoolAtt(d_input, output_size)
+            else:
+                self.model = PoolAttFF(d_input, output_size, h=att_h, dropout=att_dropout)
+        elif pool=='last_step_bi':
+            self.model = PoolLastStepBi(d_input, output_size)      
+        elif pool=='last_step':
+            self.model = PoolLastStep(d_input, output_size)                  
+        elif pool=='max':
+            self.model = PoolMax(d_input, output_size)  
+        elif pool=='avg':
+            self.model = PoolAvg(d_input, output_size)              
+        else:
+            raise NotImplementedError('Pool option not available')                     
+
+    def forward(self, x, n_wins):
+        return self.model(x, n_wins)
+    
+
+class PoolLastStepBi(nn.Module):
+    def __init__(self, input_size, output_size):
+        super().__init__() 
+        self.linear = nn.Linear(input_size, output_size)
+        
+    def forward(self, x, n_wins=None):    
+        x = x.view(x.shape[0], n_wins.max(), 2, x.shape[-1]//2)
+        x = torch.cat(
+            (x[torch.arange(x.shape[0]), n_wins.type(torch.long)-1, 0, :],
+            x[:,0,1,:]),
+            dim=1
+            )
+        x = self.linear(x)
+        return x    
+    
+class PoolLastStep(nn.Module):
+    def __init__(self, input_size, output_size):
+        super().__init__() 
+        self.linear = nn.Linear(input_size, output_size)
+        
+    def forward(self, x, n_wins=None):    
+        x = x[torch.arange(x.shape[0]), n_wins.type(torch.long)-1]
+        x = self.linear(x)
+        return x        
+    
 
 
-#%% Attention
-class Att_Dot(torch.nn.Module):
+
+class PoolAtt(torch.nn.Module):
+    def __init__(self, d_input, output_size):
+        super().__init__()
+        
+        self.linear1 = nn.Linear(d_input, 1)
+        self.linear2 = nn.Linear(d_input, output_size)
+
+    def forward(self, x, n_wins):
+                
+        att = self.linear1(x)
+        
+        att = att.transpose(2,1)
+        mask = torch.arange(att.shape[2])[None, :] < n_wins[:, None].to('cpu').to(torch.long)
+        att[~mask.unsqueeze(1)] = float("-Inf")          
+        att = F.softmax(att, dim=2)
+        x = torch.bmm(att, x) 
+        x = x.squeeze(1)
+        
+        x = self.linear2(x)
+            
+        return x
+    
+    
+class PoolAttFF(torch.nn.Module):
+    def __init__(self, d_input, output_size, h, dropout=0.1):
+        super().__init__()
+        
+        self.linear1 = nn.Linear(d_input, h)
+        self.linear2 = nn.Linear(h, 1)
+        
+        self.linear3 = nn.Linear(d_input, output_size)
+        
+        self.activation = F.relu
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x, n_wins):
+
+        att = self.linear2(self.dropout(self.activation(self.linear1(x))))
+        att = att.transpose(2,1)
+        mask = torch.arange(att.shape[2])[None, :] < n_wins[:, None].to('cpu').to(torch.long)
+        att[~mask.unsqueeze(1)] = float("-Inf")          
+        att = F.softmax(att, dim=2)
+        x = torch.bmm(att, x) 
+        x = x.squeeze(1)
+        
+        x = self.linear3(x)
+        
+        return x    
+
+class PoolAvg(torch.nn.Module):
+    def __init__(self, d_input, output_size):
+        super().__init__()
+        
+        self.linear = nn.Linear(d_input, output_size)
+        
+    def forward(self, x, n_wins):
+                
+        mask = torch.arange(x.shape[1])[None, :] < n_wins[:, None].to('cpu').to(torch.long)
+        mask = ~mask.unsqueeze(2).to(x.device)
+        x.masked_fill_(mask, 0)
+
+        x = torch.div(x.sum(1), n_wins.unsqueeze(1))   
+            
+        x = self.linear(x)
+        
+        return x
+    
+    
+class PoolMax(torch.nn.Module):
+    def __init__(self, d_input, output_size):
+        super().__init__()
+        
+        self.linear = nn.Linear(d_input, output_size)
+        
+    def forward(self, x, n_wins):
+                
+        mask = torch.arange(x.shape[1])[None, :] < n_wins[:, None].to('cpu').to(torch.long)
+        mask = ~mask.unsqueeze(2).to(x.device)
+        x.masked_fill_(mask, float("-Inf"))
+
+        x = x.max(1)[0]
+        
+        x = self.linear(x)
+            
+        return x    
+    
+    
+
+#%% Alignment
+class Attention(torch.nn.Module):
+    def __init__(self,
+                 att_method,
+                 apply_att_method,
+                 q_dim=None,
+                 y_dim=None,
+                 att_dim=None
+                 ):
+        super().__init__()
+    
+        # Attention method --------------------------------------------------------
+        if att_method=='bahd':
+            self.att = AttBahdanau(
+                    q_dim=q_dim,
+                    y_dim=y_dim, 
+                    att_dim=att_dim) 
+            
+        elif att_method=='luong':
+            self.att = AttLuong(
+                    q_dim=q_dim, 
+                    y_dim=y_dim) 
+            
+        elif att_method=='dot':
+            self.att = AttDot()
+            
+        elif att_method=='cosine':
+            self.att = AttCosine()            
+
+        elif att_method=='distance':
+            self.att = AttDistance()
+            
+        elif (att_method=='none') or (att_method is None):
+            self.att = None
+        else:
+            raise NotImplementedError    
+        
+        # Apply method ----------------------------------------------------------
+        if apply_att_method=='soft':
+            self.apply_att = ApplySoftAttention() 
+            
+        elif apply_att_method=='hard':
+            self.apply_att = ApplyHardAttention() 
+        else:
+            raise NotImplementedError            
+            
+    def _mask_attention(self, att, y, n_wins):       
+        mask = torch.arange(att.shape[2])[None, :] < n_wins[:, None].to('cpu').to(torch.long)
+        mask = mask.unsqueeze(1).expand_as(att)
+        att[~mask] = float("-Inf")    
+        
+    def forward(self, query, y, n_wins_y):        
+        if self.att is not None:
+            att_score, sim = self.att(query, y)     
+            self._mask_attention(att_score, y, n_wins_y)
+            y = self.apply_att(y, att_score)        
+        return y        
+
+class AttDot(torch.nn.Module):
     def __init__(self, softmax=True):
         super().__init__()
         self.softmax = softmax
-    def forward(self, query, y):
+                
+    def forward(self, query, y, att_dim=None):
         att = torch.bmm(query, y.transpose(2,1))
         sim = att.max(2)[0].unsqueeze(1)
+        
         if self.softmax:
             att = F.softmax(att, dim=2)
+            
         return att, sim
     
-class Att_Luong(torch.nn.Module):
+class AttCosine(torch.nn.Module):
+    def __init__(self, softmax=True):
+        super().__init__()
+        self.softmax = softmax
+        self.pdist = nn.CosineSimilarity(dim=3)
+        
+    def forward(self, query, y, att_dim=None):
+        
+        att = self.pdist(query.unsqueeze(1), y.unsqueeze(2))
+        sim = att.max(2)[0].unsqueeze(1)
+        
+        if self.softmax:
+            att = F.softmax(att, dim=2)
+            
+        return att, sim    
+
+    
+class AttDistance(torch.nn.Module):
+    def __init__(self, dist_norm=1, weight_norm=1):
+        super().__init__()
+        self.dist_norm = dist_norm
+        self.weight_norm = weight_norm
+    def forward(self, query, y):
+        att = (query.unsqueeze(1)-y.unsqueeze(2)).abs().pow(self.dist_norm)
+        att = att.mean(dim=3).pow(self.weight_norm)
+        att = - att.transpose(2,1)
+        sim = att.max(2)[0].unsqueeze(1)
+        att = F.softmax(att, dim=2)
+        return att, sim
+    
+    
+class AttBahdanau(torch.nn.Module):
+    def __init__(self, q_dim, y_dim, att_dim=128):
+        super().__init__()
+        self.q_dim = q_dim
+        self.y_dim = y_dim
+        self.att_dim = att_dim
+        self.Wq = nn.Linear(self.q_dim, self.att_dim)
+        self.Wy = nn.Linear(self.y_dim, self.att_dim)
+        self.v = nn.Linear(self.att_dim, 1)
+    def forward(self, query, y):
+        att = torch.tanh( self.Wq(query).unsqueeze(1) + self.Wy(y).unsqueeze(2) )
+        att = self.v(att).squeeze(3).transpose(2,1)
+        sim = att.max(2)[0].unsqueeze(1)
+        att = F.softmax(att, dim=2 )
+        return att, sim
+
+class AttLuong(torch.nn.Module):
     def __init__(self, q_dim, y_dim, softmax=True):
         super().__init__()
         self.q_dim = q_dim
@@ -611,182 +1290,981 @@ class Att_Luong(torch.nn.Module):
             att = F.softmax( att, dim=2 )
         return att, sim
 
-class Apply_Soft_Attention(torch.nn.Module):
+class ApplyHardAttention(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, y, att):        
+        self.idx = att.argmax(2)
+        y = y[torch.arange(y.shape[0]).unsqueeze(-1), self.idx]        
+        return y    
+    
+class ApplySoftAttention(torch.nn.Module):
     def __init__(self):
         super().__init__()
     def forward(self, y, att):        
         y = torch.bmm(att, y)       
-        return y        
+        return y     
+    
+class Fusion(torch.nn.Module):
+    def __init__(self, fuse_dim=None, in_feat=None, fuse=None):
+        super().__init__()
+        self.fuse_dim = fuse_dim
+        self.fuse = fuse
 
-#%% Dataset
-class NISQA_Dataset(Dataset):
-
-    def __init__(self, 
-                 dfile,
-                 dcon=None,
-                 mos='MOS',
-                 filename='filename',
-                 data_dir=None,
-                 seg_length=15,
-                 max_length=None,
-                 to_memory=False,
-                 ):
-
-        self.dfile = dfile
-        self.dcon = dcon
-        self.mos = mos
-        self.filename = filename
-        self.data_dir = data_dir
-        self.seg_length = seg_length
-        self.max_length = max_length
-
-        self.to_memory = False
-        if to_memory:
-            self._to_memory()
-
-
-    def _to_memory(self):
-        self.mem_list = [out for out in tqdm(self, total=len(self)) ]
-        self.to_memory = True
-
-    def __getitem__(self, index):
-        assert isinstance(index, int), 'index must be integer (no slice)'
-
-        if self.to_memory:
-            return self.mem_list[index]
+        if self.fuse=='x/y/-':
+            self.fan_out = 3*in_feat
+        elif self.fuse=='*':
+             self.fan_out = in_feat            
+        elif self.fuse=='+/-':
+             self.fan_out = 2*in_feat
+        elif self.fuse=='+/-/*':
+             self.fan_out = 3*in_feat    
+        elif self.fuse=='2-2/-2/*':
+             self.fan_out = 3*in_feat    
+        elif self.fuse=='2-2/-2/*/x':
+             self.fan_out = 4*in_feat                     
+        elif self.fuse==False:
+            self.fan_out = 2*in_feat
         else:
-            # Get MOS
-            y_mos = self.dfile[self.mos].iloc[index].reshape(-1).astype('float32')
+            raise NotImplementedError         
             
-            # Load spec    
-            file_path = os.path.join(self.data_dir, self.dfile[self.filename].iloc[index])
-            spec = get_librosa_melspec(file_path)  
-    
-            # Segment specs   
-            x_spec_seg, n_wins = segment_specs(spec, self.seg_length, self.max_length)    
+        if self.fuse_dim:
+            self.lin_fusion = nn.Linear(self.fan_out, self.fuse_dim)
+            self.fan_out = fuse_dim       
+                        
+            
+    def forward(self, x, y):
         
-            return x_spec_seg, y_mos, (index, n_wins)
-
-    def __len__(self):
-        return len(self.dfile)
-
-
-def segment_specs(x, seg_length, max_length=None):
-    
-    if seg_length % 2 == 0:
-        raise ValueError('seg_length must be odd! (seg_lenth={})'.format(seg_length))
-    
-    if not torch.is_tensor(x):
-        x = torch.tensor(x)
-    
-    n_wins = x.shape[1]-(seg_length-1)
-
-    # broadcast magic to segment melspec
-    idx1 = torch.arange(seg_length)
-    idx2 = torch.arange(n_wins)
-    idx3 = idx1.unsqueeze(0) + idx2.unsqueeze(1)
-    x = x.transpose(1,0)[idx3,:].unsqueeze(1).transpose(3,2)
-    
-    # padding
-    if max_length:
-        xtmp = x
-        x = torch.zeros((max_length, x.shape[1], x.shape[2], x.shape[3])) - 80
-        x[:n_wins,:] = xtmp
+        if self.fuse=='x/y/-':
+            x = torch.cat((x, y, x-y), 2)
+        elif self.fuse=='*':
+            x = x*y
+        elif self.fuse=='+/-':
+            x = torch.cat((x+y, x-y), 2)    
+        elif self.fuse=='+/-/*':
+            x = torch.cat((x+y, x-y, x*y), 2)    
+        elif self.fuse=='2-2/-2/*':
+            x = torch.cat(( (x**2-y**2), (x-y)**2, x*y ), 2)    
+        elif self.fuse=='2-2/-2/*/x':
+            x = torch.cat(( (x**2-y**2), (x-y)**2, x*y, x ), 2)    
+        elif self.fuse=='x/y':
+            x = torch.cat((x, y), 2)   
+        else:
+            raise NotImplementedError           
+            
+        if self.fuse_dim:
+            x = self.lin_fusion(x)
+            
+        return x
         
+        
+#%% Evaluation 
+def predict_mos(model, ds, bs, dev, num_workers=0):      
+    dl = DataLoader(ds,
+                    batch_size=bs,
+                    shuffle=False,
+                    drop_last=False,
+                    pin_memory=False,
+                    num_workers=num_workers)
+    model.to(dev)
+    model.eval()
+    with torch.no_grad():
+        y_hat_list = [ [model(xb.to(dev), n_wins).cpu().numpy(), yb.cpu().numpy()] for xb, yb, (idx, n_wins) in dl]
+    yy = np.concatenate( y_hat_list, axis=1 )
+    y_hat = yy[0,:,0].reshape(-1,1)
+    y = yy[1,:,0].reshape(-1,1)
+    ds.df['mos_pred'] = y_hat.astype(dtype=float)
+    return y_hat, y
+
+
+def predict_dim(model, ds, bs, dev, num_workers=0):     
+    dl = DataLoader(ds,
+                    batch_size=bs,
+                    shuffle=False,
+                    drop_last=False,
+                    pin_memory=False,
+                    num_workers=num_workers)
+    model.to(dev)
+    model.eval()
+    with torch.no_grad():
+        y_hat_list = [ [model(xb.to(dev), n_wins).cpu().numpy(), yb.cpu().numpy()] for xb, yb, (idx, n_wins) in dl]
+    yy = np.concatenate( y_hat_list, axis=1 )
+    
+    y_hat = yy[0,:,:]
+    y = yy[1,:,:]
+    
+    ds.df['mos_pred'] = y_hat[:,0].reshape(-1,1)
+    ds.df['noi_pred'] = y_hat[:,1].reshape(-1,1)
+    ds.df['dis_pred'] = y_hat[:,2].reshape(-1,1)
+    ds.df['col_pred'] = y_hat[:,3].reshape(-1,1)
+    ds.df['loud_pred'] = y_hat[:,4].reshape(-1,1)
+    
+    return y_hat, y
+
+
+def is_const(x):
+    if np.linalg.norm(x - np.mean(x)) < 1e-13 * np.abs(np.mean(x)):
+        return True
+    elif np.all(x==x[0]):
+        return True
+    else:
+        return False
+    
+def calc_eval_metrics(y, y_hat, y_hat_map=None, d=None, ci=None):
+    '''
+    Calculate RMSE, Pearson's correlation.
+    '''         
+    r = {
+        'r_p': np.nan,
+        'rmse': np.nan,
+        'rmse_map': np.nan,
+        'rmse_star_map': np.nan,
+        }
+    if is_const(y_hat):
+        r['r_p'] = np.nan
+    else:        
+        r['r_p'] = pearsonr(y, y_hat)[0]
+    r['rmse'] = calc_rmse(y, y_hat)
+    if y_hat_map is not None:
+        r['rmse_map'] = calc_rmse(y, y_hat_map, d=d)     
+        if ci is not None:
+            r['rmse_star_map'] = calc_rmse_star(y, y_hat_map, ci, d)[0]
+    return r
+
+def calc_rmse(y_true, y_pred, d=0):
+    if d==0:
+        rmse = np.sqrt(np.mean(np.square(y_true-y_pred)))
+    else:
+        N = y_true.shape[0]
+        if (N-d)<1:
+            rmse = np.nan
+        else:
+            rmse = np.sqrt( 1/(N-d) * np.sum( np.square(y_true-y_pred) ) )  # Eq (7-29) P.1401
+    return rmse
+
+def calc_rmse_star(mos_sub, mos_obj, ci, d):
+    N = mos_sub.shape[0]
+    error = mos_sub-mos_obj
+
+    if ci[0]==-1:
+        p_error = np.nan
+        rmse_star = np.nan
+    else:
+        p_error = (abs(error)-ci).clip(min=0)   # Eq (7-27) P.1401
+        if (N-d)<1:
+            rmse_star = np.nan
+        else:        
+            rmse_star = np.sqrt( 1/(N-d) * sum(p_error**2) )  # Eq (7-29) P.1401
+
+    return rmse_star, p_error, error
+
+def calc_mapped(x, b):
+    N = x.shape[0]
+    order = b.shape[0]-1
+    A = np.zeros([N,order+1])
+    for i in range(order+1):
+        A[:,i] = x**(i)
+    return A @ b
+
+def fit_first_order(y_con, y_con_hat):
+    A = np.vstack([np.ones(len(y_con_hat)), y_con_hat]).T
+    b = np.linalg.lstsq(A, y_con, rcond=None)[0]
+    return b
+    
+def fit_second_order(y_con, y_con_hat):
+    A = np.vstack([np.ones(len(y_con_hat)), y_con_hat, y_con_hat**2]).T
+    b = np.linalg.lstsq(A, y_con, rcond=None)[0]
+    return b
+
+def fit_third_order(y_con, y_con_hat):
+    A = np.vstack([np.ones(len(y_con_hat)), y_con_hat, y_con_hat**2, y_con_hat**3]).T
+    b = np.linalg.lstsq(A, y_con, rcond=None)[0]
+    
+    p = np.poly1d(np.flipud(b))
+    p2 = np.polyder(p)
+    rr = np.roots(p2)
+    r = rr[np.imag(rr)==0]
+    monotonic = all( np.logical_or(r>max(y_con_hat),r<min(y_con_hat)) )
+    if monotonic==False:
+        print('Not monotonic!!!')    
+    return b
+
+
+def fit_monotonic_third_order(
+        dfile_db,
+        dcon_db=None,
+        pred=None,
+        target_mos=None,
+        target_ci=None, 
+        mapping=None):
+    
+    y = dfile_db[target_mos].to_numpy()
+    
+    y_hat = dfile_db[pred].to_numpy()
+    
+    if dcon_db is None:
+        if target_ci in dfile_db:
+            ci = dfile_db[target_ci].to_numpy()   
+        else:
+            ci = 0        
+    else:
+        y_con = dcon_db[target_mos].to_numpy()
+        
+        if target_ci in dcon_db:
+            ci = dcon_db[target_ci].to_numpy()   
+        else:
+            ci = 0         
                 
-    return x, np.array(n_wins)
+    x = y_hat
+    y_hat_min = min(y_hat) - 0.01
+    y_hat_max = max(y_hat) + 0.01
+ 
 
+    def polynomial(p, x):
+        return p[0]+p[1]*x+p[2]*x**2+p[3]*x**3
 
-def get_librosa_melspec(file_path):
+    def constraint_2nd_der(p):
+        return 2*p[2]+6*p[3]*x
 
-    # Calc spec
-    y, sr = lb.load(file_path, sr=48000)
+    def constraint_1st_der(p):
+        x = np.arange(y_hat_min, y_hat_max, 0.1)
+        return p[1]+2*p[2]*x+3*p[3]*x**2
 
-    S = lb.feature.melspectrogram(
-        y=y,
-        sr=sr,
-        S=None,
-        n_fft=1024,
-        hop_length=480,
-        win_length=None,
-        window='hann',
-        center=True,
-        pad_mode='reflect',
-        power=1.0,
+    def objective_con(p):
+        x_map = polynomial(p, x)
+        dfile_db['x_map'] = x_map
+        x_map_con = dfile_db.groupby('con').mean().x_map.to_numpy() 
+        err = x_map_con-y_con
+        if mapping=='pError':
+            p_err = (abs(err)-ci).clip(min=0)
+            return (p_err**2).sum()
+        elif mapping=='error':
+            return (err**2).sum()
+        else:
+            raise NotImplementedError         
 
-        n_mels=48,
-        fmin=0.0,
-        fmax=16e3,
-        htk=False,
-        norm='slaney',
-        )
+    def objective_file(p):
+        x_map = polynomial(p, x)
+        err = x_map-y
+        if mapping=='pError':
+            p_err = (abs(err)-ci).clip(min=0)
+            return (p_err**2).sum()
+        elif mapping=='error':
+            return (err**2).sum()
+        else:
+            raise NotImplementedError 
 
-    spec = lb.core.amplitude_to_db(S, ref=1.0, amin=1e-4, top_db=80.0)
-
-    return spec
-
-#%% Evaluate
-def eval_results(df, target_mos = 'MOS', pred = 'y_hat',
-                 do_print = False,
-                 do_plot = False):
-
-    df.db = df.db.astype("category")
+    cons = dict(type='ineq', fun=constraint_1st_der)
     
+    if dcon_db is None:
+        res = minimize(
+            objective_file,
+            x0=np.array([0., 1., 0., 0.]),
+            method='SLSQP', 
+            constraints=cons,
+            )
+    else:
+        res = minimize(
+            objective_con,
+            x0=np.array([0., 1., 0., 0.]),
+            method='SLSQP', 
+            constraints=cons,
+            )
+    b = res.x
+    return b
+
+def calc_mapping(
+        dfile_db,
+        mapping=None,
+        dcon_db=None,
+        target_mos=None,
+        target_ci=None,
+        pred=None,
+        ):
+    
+    if dcon_db is not None:
+        y = dcon_db[target_mos].to_numpy()        
+        y_hat = dfile_db.groupby('con').mean().get(pred).to_numpy()
+    else:
+        y = dfile_db[target_mos].to_numpy()        
+        y_hat = dfile_db[pred].to_numpy()    
+        
+    if mapping==None:
+        b = np.array([0,1,0,0])
+        d_map = 0
+    elif mapping=='first_order':
+        b = fit_first_order(y, y_hat)
+        d_map = 1
+    elif mapping=='second_order':
+        b = fit_second_order(y, y_hat)            
+        d_map = 3
+    elif mapping=='third_order':
+        b = fit_third_order(y, y_hat)            
+        d_map = 4        
+    elif mapping=='monotonic_third_order':
+        b = fit_monotonic_third_order(
+            dfile_db,
+            dcon_db=dcon_db, 
+            pred=pred, 
+            target_mos=target_mos, 
+            target_ci=target_ci,
+            mapping='error',
+            )
+        d_map = 4
+    else:
+        raise NotImplementedError      
+    
+    return b, d_map
+
+class earlyStopper(object):
+    '''
+    Early stopping class. 
+    
+    Training is stopped if neither RMSE or Pearson's correlation
+    is improving after "patience" epochs.
+    '''            
+    def __init__(self, patience):
+        self.best_rmse = 1e10
+        self.best_r_p = -1e10
+        self.cnt = -1
+        self.patience = patience
+        
+def eval_results(
+        df,
+        dcon=None, 
+        target_mos = 'mos', 
+        target_ci = 'mos_ci',
+        pred = 'mos_pred',
+        mapping = None,
+        do_print = False,
+        do_plot = False
+        ):
+    '''
+    Evaluates a trained model on given dataset.
+    '''            
     # Loop through databases
-    results_per_db = pd.DataFrame(columns = ['db', 'r_p', 'r_s', 'rmse'])
-    for i in range(len(df.db.cat.categories)):
+    db_results_df = []
+    df['y_hat_map'] = np.nan
+    
+    for db_name in df.db.astype("category").cat.categories:
 
-        # Get dataframe for current database
-        db_name = df.db.cat.categories[i]
         df_db = df.loc[df.db==db_name]
-
-        # Get results      
+        if dcon is not None:
+            dcon_db = dcon.loc[dcon.db==db_name]
+        else:
+            dcon_db = None
+        
+        # per file -----------------------------------------------------------        
         y = df_db[target_mos].to_numpy()
-        y_hat = df_db[pred].to_numpy()
-          
-        # Calc results
-        if np.isnan(y_hat).any() or not np.isfinite(y_hat).any():
-            r_p = -1
-            r_s = -1
-            rmse = -1    
-        else: 
-            r_p = pearsonr(y, y_hat)[0]
-            r_s = spearmanr(y, y_hat)[0]
-            rmse = np.sqrt(np.mean((y-y_hat)**2))
+        if (y<0).any():
+            r = {'r_p': np.nan,'r_s': np.nan,'rmse': np.nan,'r_p_map': np.nan,
+                 'r_s_map': np.nan,'rmse_map': np.nan,'rmse_star_map': np.nan}
+        else:
+            y_hat = df_db[pred].to_numpy()      
             
-        # Save results in dataframe
-        data = {'db': db_name, 'r_p': r_p, 'r_s': r_s, 'rmse': rmse}
-        results_per_db.loc[i] = data
+            if target_ci in df_db:
+                ci = df_db[target_ci].to_numpy()   
+            else:
+                ci = None
+            
+            b, d = calc_mapping(
+                df_db,
+                mapping=mapping,
+                target_mos=target_mos,
+                target_ci=target_ci,
+                pred=pred
+                )
+            y_hat_map = calc_mapped(y_hat, b)
+            
+            r = calc_eval_metrics(y, y_hat, y_hat_map=y_hat_map, d=d, ci=ci)
+        r = {f'{k}_file': v for k, v in r.items()}
+            
+        # per con ------------------------------------------------------------
+        r_con = {'r_p': np.nan,'r_s': np.nan,'rmse': np.nan,'r_p_map': np.nan,
+             'r_s_map': np.nan,'rmse_map': np.nan,'rmse_star_map': np.nan}
+        
+        if (dcon_db is not None) and ('con' in df_db):
+            
+            y_con = dcon_db[target_mos].to_numpy()
+            y_con_hat = df_db.groupby('con').mean().get(pred).to_numpy()
 
-        # Plot
-        if do_plot:
-            plt.figure(figsize=(4.0, 4.0))
+            if not (y_con<0).any():
+                
+                if target_ci in dcon_db:
+                    ci_con = dcon_db[target_ci].to_numpy()   
+                else:
+                    ci_con = None            
+    
+                b_con, d = calc_mapping(
+                    df_db,
+                    dcon_db=dcon_db,
+                    mapping=mapping,
+                    target_mos=target_mos,
+                    target_ci=target_ci,
+                    pred=pred
+                    )            
+                
+                df_db['y_hat_map'] = calc_mapped(y_hat, b_con)  
+                df['y_hat_map'].loc[df.db==db_name] = df_db['y_hat_map'] 
+                
+                y_con_hat_map = df_db.groupby('con').mean().get('y_hat_map').to_numpy()
+                
+                r_con = calc_eval_metrics(y_con, y_con_hat, y_hat_map=y_con_hat_map, d=d, ci=ci_con)
+                
+        r_con = {f'{k}_con': v for k, v in r_con.items()}
+        r = {**r, **r_con}
+            
+        # ---------------------------------------------------------------------
+        db_results_df.append({'db': db_name, **r})
+        # Plot  ------------------------------------------------------------------
+        if do_plot and (y[0]!=-1):
+            xx = np.arange(0, 6, 0.01)
+            yy = calc_mapped(xx, b)            
+        
+            plt.figure(figsize=(3.0, 3.0), dpi=300)
             plt.clf()
-            plt.plot(y_hat, y, 'o', label='Original data', markersize=5)
-            plt.plot([0, 5], [0, 5], 'k')
+            plt.plot(y_hat, y, 'o', label='Original data', markersize=2)
+            plt.plot([0, 5], [0, 5], 'gray')
+            plt.plot(xx, yy, 'r', label='Fitted line')
             plt.axis([1, 5, 1, 5])
             plt.gca().set_aspect('equal', adjustable='box')
             plt.grid(True)
             plt.xticks(np.arange(1, 6))
             plt.yticks(np.arange(1, 6))
-            plt.ylabel('Subjective MOS')
-            plt.xlabel('Predicted MOS')
+            # plt.title(db_name + ' per file')
+            plt.ylabel('Subjective ' + target_mos.upper())
+            plt.xlabel('Predicted ' + target_mos.upper())
+            plt.savefig('corr_diagram_fr_' + db_name + '.pdf', dpi=300, bbox_inches="tight")
             plt.show()
+
+                
+            if (dcon_db is not None) and ('con' in df_db):
+                
+                xx = np.arange(0, 6, 0.01)
+                yy = calc_mapped(xx, b_con)     
+                
+                plt.figure(figsize=(3.0, 3.0), dpi=300)
+                plt.clf()
+                plt.plot(y_con_hat, y_con, 'o', label='Original data', markersize=3)
+                plt.plot([0, 5], [0, 5], 'gray')
+                plt.plot(xx, yy, 'r', label='Fitted line')
+                plt.axis([1, 5, 1, 5])
+                plt.gca().set_aspect('equal', adjustable='box')
+                plt.grid(True)
+                plt.xticks(np.arange(1, 6))
+                plt.yticks(np.arange(1, 6))
+                plt.title(db_name + ' per con')
+                plt.ylabel('Sub ' + target_mos.upper())
+                plt.xlabel('Pred ' + target_mos.upper())
+                # plt.savefig(db_name + '.pdf', dpi=300, bbox_inches="tight")
+                plt.show()            
             
-        # Print
-        if do_print:
-            print('%-30s r_p: %0.2f, r_s: %0.2f, rmse: %0.2f'
-                  % (db_name+':', r_p, r_s, rmse))
+        # Print ------------------------------------------------------------------
+        if do_print and (y[0]!=-1):
+            print('%-30s r_p_con: %0.2f, rmse_con: %0.2f, r_p_file: %0.2f, rmse_file: %0.2f, rmse_star_map_con: %0.2f'
+                  % (db_name+':', r['r_p_con'], r['rmse_con'], r['r_p_file'], r['rmse_file'], r['rmse_star_map_con']))
 
-    # Save overall results in dictonary
-    r_p_mean = results_per_db.r_p.to_numpy().mean()
-    r_s_mean = results_per_db.r_s.to_numpy().mean()
-    rmse_mean = results_per_db.rmse.to_numpy().mean()
+    # Save individual database results in DataFrame
+    db_results_df = pd.DataFrame(db_results_df)
+    
+    r_average = {}
+    r_average['r_p_mean_file'] = db_results_df.r_p_file.mean()
+    r_average['rmse_mean_file'] = db_results_df.rmse_file.mean()
+    r_average['rmse_map_mean_file'] = db_results_df.rmse_map_file.mean()
+    r_average['rmse_star_map_mean_file'] = db_results_df.rmse_star_map_file.mean()    
+
+    if dcon_db is not None:
+        r_average['r_p_mean_con'] = db_results_df.r_p_con.mean()
+        r_average['rmse_mean_con'] = db_results_df.rmse_con.mean()
+        r_average['rmse_map_mean_con'] = db_results_df.rmse_map_con.mean()
+        r_average['rmse_star_map_mean_con'] = db_results_df.rmse_star_map_con.mean()    
+    else:        
+        r_average['r_p_mean_con'] = np.nan
+        r_average['rmse_mean_con'] = np.nan
+        r_average['rmse_map_mean_con'] = np.nan
+        r_average['rmse_star_map_mean_con'] = np.nan
+
+    # Get overall per file results      
+    y = df[target_mos].to_numpy()
+    y_hat = df[pred].to_numpy()
+    
+    if target_ci in df:
+        ci = df[target_ci].to_numpy()  
+    else:
+        ci = None    
         
-    results_overall = {
-        'r_p': r_p_mean,
-        'r_s': r_s_mean,
-        'rmse': rmse_mean
+    r_total_file = calc_eval_metrics(y, y_hat, d=d, ci=ci)
+    
+    overall_results = {
+        **r_total_file,
+        **r_average
         }
+    
+    return db_results_df, overall_results
 
-    return results_per_db, results_overall
+
+#%% Loss
+class biasLoss(object):
+    '''
+    Bias loss class. 
+    
+    Calculates loss while considering database bias.
+    '''    
+    def __init__(self, db, anchor_db=None, mapping='first_order', min_r=0.7, loss_weight=0.0, plot=False):
+        
+        self.db = db
+        self.mapping = mapping
+        self.anchor_db = anchor_db
+        self.loss_weight = loss_weight
+        
+        self.b = np.zeros((len(db),4))
+        self.b[:,1] = 1
+        self.do_update = False
+        
+        if min_r is None:
+            self.min_r = 1
+        else:
+            self.min_r = min_r
+            
+    def get_loss(self, yb, yb_hat, idx):
+        b = torch.tensor(self.b, dtype=torch.float).to(yb_hat.device)
+        b = b[idx,:]
+
+        yb_hat_map = (b[:,0]+b[:,1]*yb_hat[:,0]+b[:,2]*yb_hat[:,0]**2+b[:,3]*yb_hat[:,0]**3).view(-1,1)
+        
+        loss_bias = self._nan_mse(yb_hat_map, yb)   
+        loss_normal = self._nan_mse(yb_hat, yb)           
+        
+        loss = loss_bias + self.loss_weight * loss_normal
+
+        return loss
+    
+    def update_bias(self, y, y_hat):
+        y_hat = y_hat.reshape(-1)
+        y = y.reshape(-1)
+        
+        if not self.do_update:
+            r = pearsonr(y[y!=-1], y_hat[y!=-1])[0]
+            print('pearson {:0.2f}'.format(r))
+            if r>self.min_r:
+                self.do_update = True
+            
+        if self.do_update:
+            print('--> bias updated')
+            for db_name in self.db.unique():
+                
+                db_idx = (self.db==db_name).to_numpy().nonzero()
+                y_hat_db = y_hat[db_idx]
+                y_db = y[db_idx]
+                
+                if y_db[0]!=-1:
+                
+                    if self.mapping=='first_order':
+                        b_db = self._calc_bias_first_order(y_hat_db, y_db, bounds=False)
+                    else:
+                        raise NotImplementedError
+                                    
+                    if not db_name==self.anchor_db:
+                        self.b[db_idx,:len(b_db)] = b_db                   
+                          
+                
+    def _calc_bias_first_order(self, y_hat, y):
+        A = np.vstack([np.ones(len(y_hat)), y_hat]).T
+        btmp = np.linalg.lstsq(A, y, rcond=None)[0]
+        b = np.zeros((4))
+        b[0:2] = btmp
+        return b
+    
+    def _nan_mse(self, y, y_hat):
+        err = (y-y_hat).view(-1)
+        idx_not_nan = ~torch.isnan(err)
+        nan_err = err[idx_not_nan]
+        return torch.mean(nan_err**2)    
+        
+                    
+
+
+#%% Early stopping 
+class earlyStopper(object):
+    '''
+    Early stopping class. 
+    
+    Training is stopped if neither RMSE or Pearson's correlation
+    is improving after "patience" epochs.
+    '''            
+    def __init__(self, patience):
+        self.best_rmse = 1e10
+        self.best_r_p = -1e10
+        self.cnt = -1
+        self.patience = patience
+        
+    def step(self, r):
+        if r['r_p_mean_con'] > self.best_r_p:
+            self.best_r_p = r['r_p_mean_con']
+            self.cnt = -1   
+        if r['rmse_star_map_mean_con'] < self.best_rmse:
+            self.best_rmse = r['rmse_star_map_mean_con']
+            self.cnt = -1                  
+        self.cnt += 1 
+
+        if self.cnt >= self.patience:
+            stop_early = True
+            return stop_early
+        else:
+            stop_early = False
+            return stop_early
+        
+class earlyStopper_dim(object):
+    '''
+    Early stopping class. 
+    
+    Training is stopped if neither RMSE or Pearson's correlation
+    is improving after "patience" epochs.
+    '''            
+    def __init__(self, patience):
+        
+        self.best_rmse = 1e10
+        self.best_rmse_noi = 1e10
+        self.best_rmse_col = 1e10
+        self.best_rmse_dis = 1e10
+        self.best_rmse_loud = 1e10
+
+        self.best_r_p = -1e10
+        self.best_r_p_noi = -1e10
+        self.best_r_p_col = -1e10
+        self.best_r_p_dis = -1e10
+        self.best_r_p_loud = -1e10
+    
+        self.cnt = -1
+        self.patience = patience
+        
+    def step(self, r):
+        
+        if r['r_p_mean_con'] > self.best_r_p:
+            self.best_r_p = r['r_p_mean_con']
+            self.cnt = -1   
+        if r['r_p_mean_con_noi'] > self.best_r_p_noi:
+            self.best_r_p_noi = r['r_p_mean_con_noi']
+            self.cnt = -1               
+        if r['r_p_mean_con_col'] > self.best_r_p_col:
+            self.best_r_p_col = r['r_p_mean_con_col']
+            self.cnt = -1   
+        if r['r_p_mean_con_dis'] > self.best_r_p_dis:
+            self.best_r_p_dis = r['r_p_mean_con_dis']
+            self.cnt = -1   
+        if r['r_p_mean_con_loud'] > self.best_r_p_loud:
+            self.best_r_p_loud = r['r_p_mean_con_loud']
+            self.cnt = -1   
+            
+        if r['rmse_star_map_mean_con'] < self.best_rmse:
+            self.best_rmse = r['rmse_star_map_mean_con']
+            self.cnt = -1
+        if r['rmse_star_map_mean_con_noi'] < self.best_rmse_noi:
+            self.best_rmse_noi = r['rmse_star_map_mean_con_noi']
+            self.cnt = -1
+        if r['rmse_star_map_mean_con_col'] < self.best_rmse_col:
+            self.best_rmse_col = r['rmse_star_map_mean_con_col']
+            self.cnt = -1
+        if r['rmse_star_map_mean_con_dis'] < self.best_rmse_dis:
+            self.best_rmse_dis = r['rmse_star_map_mean_con_dis']
+            self.cnt = -1
+        if r['rmse_star_map_mean_con_loud'] < self.best_rmse_loud:
+            self.best_rmse_loud = r['rmse_star_map_mean_con_loud']
+            self.cnt = -1
+           
+        self.cnt += 1 
+
+        if self.cnt >= self.patience:
+            stop_early = True
+            return stop_early
+        else:
+            stop_early = False
+            return stop_early        
+        
+
+def get_lr(optimizer):
+    '''
+    Get current learning rate from Pytorch optimizer.
+    '''         
+    for param_group in optimizer.param_groups:
+        return param_group['lr']
+
+
+#%% Dataset
+class SpeechQualityDataset(Dataset):
+    '''
+    Dataset for Speech Quality Model.
+    '''  
+    def __init__(
+        self,
+        df,
+        df_con=None,
+        data_dir='',
+        folder_column='',
+        filename_column='filename',
+        mos_column='MOS',
+        seg_length=15,
+        max_length=None,
+        to_memory=False,
+        to_memory_workers=0,
+        transform=None,
+        seg_hop_length=1,
+        ms_n_fft = 1024,
+        ms_hop_length = 80,
+        ms_win_length = 170,
+        ms_n_mels=32,
+        ms_sr=48e3,
+        ms_fmax=16e3,
+        double_ended=False,
+        filename_column_ref=None,
+        dim=False,
+        ):
+
+        self.df = df
+        self.df_con = df_con
+        self.data_dir = data_dir
+        self.folder_column = folder_column
+        self.filename_column = filename_column
+        self.filename_column_ref = filename_column_ref
+        self.mos_column = mos_column        
+        self.seg_length = seg_length
+        self.seg_hop_length = seg_hop_length
+        self.max_length = max_length
+        self.transform = transform
+        self.to_memory_workers = to_memory_workers
+        self.ms_n_fft = ms_n_fft
+        self.ms_hop_length = ms_hop_length
+        self.ms_win_length = ms_win_length
+        self.ms_n_mels = ms_n_mels
+        self.ms_sr = ms_sr
+        self.ms_fmax = ms_fmax
+        self.double_ended = double_ended
+        self.dim = dim
+    
+        # if True load all specs to memory
+        self.to_memory = False
+        if to_memory:
+            self._to_memory()
+            
+    def _to_memory_multi_helper(self, idx):
+        return [self._load_spec(i) for i in idx]
+    
+    def _to_memory(self):
+        if self.to_memory_workers==0:
+            self.mem_list = [self._load_spec(idx) for idx in tqdm(range(len(self)))]
+        else: 
+            buffer_size = 128
+            idx = np.arange(len(self))
+            n_bufs = int(len(idx)/buffer_size) 
+            idx = idx[:buffer_size*n_bufs].reshape(-1,buffer_size).tolist() + idx[buffer_size*n_bufs:].reshape(1,-1).tolist()  
+            pool = multiprocessing.Pool(processes=self.to_memory_workers)
+            mem_list = []
+            for out in tqdm(pool.imap(self._to_memory_multi_helper, idx), total=len(idx)):
+                mem_list = mem_list + out
+            self.mem_list = mem_list
+            pool.terminate()
+            pool.join()    
+        self.to_memory=True 
+
+    def _load_spec(self, index):
+        
+            # Load spec    
+            if self.folder_column:
+                file_path = os.path.join(self.df[self.folder_column].iloc[index], 
+                                         self.df[self.filename_column].iloc[index])
+                if self.double_ended:
+                    file_path_ref = os.path.join(self.df[self.folder_column].iloc[index], 
+                                             self.df[self.filename_column_ref].iloc[index])                    
+            else:
+                file_path = os.path.join(self.data_dir, self.df[self.filename_column].iloc[index])
+                if self.double_ended:
+                    file_path_ref = os.path.join(self.data_dir, self.df[self.filename_column_ref].iloc[index])
+       
+            spec = get_librosa_melspec(
+                file_path,
+                sr = self.ms_sr,
+                n_fft=self.ms_n_fft,
+                hop_length=self.ms_hop_length,
+                win_length=self.ms_win_length,
+                n_mels=self.ms_n_mels,
+                fmax=self.ms_fmax
+                )   
+            
+            if self.double_ended:
+                spec_ref = get_librosa_melspec(
+                    file_path_ref,
+                    sr = self.ms_sr,
+                    n_fft=self.ms_n_fft,
+                    hop_length=self.ms_hop_length,
+                    win_length=self.ms_win_length,
+                    n_mels=self.ms_n_mels,
+                    fmax=self.ms_fmax
+                    )     
+                spec = (spec, spec_ref)
+                  
+            return spec
+            
+    def __getitem__(self, index):
+        assert isinstance(index, int), 'index must be integer (no slice)'
+
+        if self.to_memory:
+            spec = self.mem_list[index]
+        else:
+            spec = self._load_spec(index)
+            
+        if self.double_ended:               
+            spec, spec_ref = spec
+        
+        # Apply transformation if given
+        if self.transform:
+            spec = self.transform(spec)      
+            
+        # Segment specs
+        file_path = os.path.join(self.data_dir, self.df[self.filename_column].iloc[index])
+        if self.seg_length is not None:
+            x_spec_seg, n_wins = segment_specs(file_path,
+                spec,
+                self.seg_length,
+                self.seg_hop_length,
+                self.max_length)
+            
+            if self.double_ended:               
+                x_spec_seg_ref, n_wins_ref = segment_specs(file_path,
+                    spec_ref,
+                    self.seg_length,
+                    self.seg_hop_length,
+                    self.max_length)              
+        else:
+            x_spec_seg = spec
+            n_wins = spec.shape[1]
+            if self.max_length is not None:
+                x_padded = np.zeros((x_spec_seg.shape[0], self.max_length))
+                x_padded[:,:n_wins] = x_spec_seg
+                x_spec_seg = np.expand_dims(x_padded.transpose(1,0), axis=(1, 3))      
+                if not torch.is_tensor(x_spec_seg):
+                    x_spec_seg = torch.tensor(x_spec_seg, dtype=torch.float)                  
+            
+            if self.double_ended:    
+                x_spec_seg_ref = spec
+                n_wins_ref = spec.shape[1]      
+                if self.max_length is not None:
+                    x_padded = np.zeros((x_spec_seg_ref.shape[0], self.max_length))
+                    x_padded[:,:n_wins] = x_spec_seg_ref
+                    x_spec_seg_ref = np.expand_dims(x_padded.transpose(1,0), axis=(1, 3))                     
+                    if not torch.is_tensor(x_spec_seg_ref):
+                        x_spec_seg_ref = torch.tensor(x_spec_seg_ref, dtype=torch.float)            
+                
+        if self.double_ended: 
+            x_spec_seg = torch.cat((x_spec_seg, x_spec_seg_ref), dim=1)
+            n_wins = np.concatenate((n_wins.reshape(1), n_wins_ref.reshape(1)), axis=0)            
+
+
+        # Get MOS
+        if self.dim:
+            if self.mos_column is not None:
+                y_mos = self.df['mos'].iloc[index].reshape(-1).astype('float32') 
+                y_noi = self.df['noi'].iloc[index].reshape(-1).astype('float32')
+                y_dis = self.df['dis'].iloc[index].reshape(-1).astype('float32')         
+                y_col = self.df['col'].iloc[index].reshape(-1).astype('float32')                
+                y_loud = self.df['loud'].iloc[index].reshape(-1).astype('float32')                
+                y = np.concatenate((y_mos, y_noi, y_dis, y_col, y_loud), axis=0)
+                y[y==-1] = np.nan
+            else:
+                y = np.full((5,1), np.nan).reshape(-1).astype('float32')
+        else:
+            if self.mos_column is not None:
+                y = self.df[self.mos_column].iloc[index].reshape(-1).astype('float32')   
+            else:
+                y = np.full(1, np.nan).reshape(-1).astype('float32') 
+        
+        return x_spec_seg, y, (index, n_wins)
+
+    def __len__(self):
+        return len(self.df)
+
+#%% Spectrograms
+def segment_specs(file_path, x, seg_length, seg_hop=1, max_length=None):
+    '''
+    Segment a spectrogram into "seg_length" wide spectrogram segments.
+    Instead of using only the frequency bin of the current time step, 
+    the neighboring bins are included as input to the CNN. For example 
+    for a seg_length of 7, the previous 3 and the follwing 3 frequency 
+    bins are included.
+
+    A spectrogram with input size [H x W] will be segmented to:
+    [W-(seg_length-1) x C x H x seg_length], where W is the width of the 
+    original mel-spec (corresponding to the length of the speech signal),
+    H is the height of the mel-spec (corresponding to the number of mel bands),
+    C is the number of CNN input Channels (always one in our case).
+    '''      
+    if seg_length % 2 == 0:
+        raise ValueError('seg_length must be odd! (seg_lenth={})'.format(seg_length))
+    if not torch.is_tensor(x):
+        x = torch.tensor(x)
+
+    n_wins = x.shape[1]-(seg_length-1)
+    
+    # broadcast magic to segment melspec
+    idx1 = torch.arange(seg_length)
+    idx2 = torch.arange(n_wins)
+    idx3 = idx1.unsqueeze(0) + idx2.unsqueeze(1)
+    x = x.transpose(1,0)[idx3,:].unsqueeze(1).transpose(3,2)
+        
+    if seg_hop>1:
+        x = x[::seg_hop,:]
+        n_wins = int(np.ceil(n_wins/seg_hop))
+        
+    if max_length is not None:
+        if max_length < n_wins:
+            raise ValueError('n_wins {} > max_length {} --- {}'.format(n_wins, max_length, file_path))
+        x_padded = torch.zeros((max_length, x.shape[1], x.shape[2], x.shape[3]))
+        x_padded[:n_wins,:] = x
+        x = x_padded
+                
+    return x, np.array(n_wins)
+
+def get_librosa_melspec(
+    file_path,
+    sr=48e3,
+    n_fft=1024, 
+    hop_length=80, 
+    win_length=170,
+    n_mels=32,
+    fmax=16e3):
+    '''
+    Calculate mel-spectrograms with Librosa.
+    '''    
+    # Calc spec
+    try:
+        y, sr = lb.load(file_path, sr=sr)
+    except:
+        raise ValueError('Could not load file {}'.format(file_path))
+            
+    
+    hop_length = int(sr * hop_length)
+    win_length = int(sr * win_length)
+
+    S = lb.feature.melspectrogram(
+        y=y,
+        sr=sr,
+        S=None,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        win_length=win_length,
+        window='hann',
+        center=True,
+        pad_mode='reflect',
+        power=1.0,
+    
+        n_mels=n_mels,
+        fmin=0.0,
+        fmax=fmax,
+        htk=False,
+        norm='slaney',
+        )
+
+    spec = lb.core.amplitude_to_db(S, ref=1.0, amin=1e-4, top_db=80.0)
+    return spec
+
+
+
