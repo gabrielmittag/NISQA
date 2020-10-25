@@ -72,7 +72,7 @@ To output the quality of a degraded speech file use: `nisqa.exe "path_to_speech_
 To save the results in a .csv file use: `nisqa.exe "path_to_speech_file.wav" "path_to_csv_file.csv"`
 
 ## Licence
-NISQA code is licensed under [MIT License](https://github.com/gabrielmittag/NISQA/blob/master/LICENSE_MIT)
+NISQA code is licensed under [MIT License](https://github.com/gabrielmittag/NISQA/blob/master/LICENSE)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
