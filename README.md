@@ -1,7 +1,7 @@
 
 # NISQA - Non-Intrusive Speech Quality Assessment
 
-We are currently working on updating the repository to make training and evaluating of the NISQA speech quality model easy. We will also supply a pretrained model and a speech quality dataset. For now, the TTS Naturalness prediction model and the old NISQA v0.4 model are available.
+We are currently working on updating the repository to make training and evaluating of the NISQA speech quality model easy. We will also supply a pretrained model and a speech quality dataset. For now, the TTS Naturalness prediction model and the old NISQA v0.4 model are available. The TTS Naturalness model uses the same neural network as the NISQA speech quality model that predicts quality of degraded speech from communication systems. However, the TTS model is trained to predict the Naturalness of synthesised speech. NISQA v0.4 predicts the quality of natural speech that was sent through a communication channel (e.g. VoIP call).
 
 ## G. Mittag and S. Möller, “Deep Learning Based Assessment of Synthetic Speech Naturalness,” in Interspeech 2020, 2020, pp. 1–5.
 
