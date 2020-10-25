@@ -72,11 +72,12 @@ To output the quality of a degraded speech file use: `nisqa.exe "path_to_speech_
 To save the results in a .csv file use: `nisqa.exe "path_to_speech_file.wav" "path_to_csv_file.csv"`
 
 ## Licence
-NISQA code is licensed under [MIT License](https://github.com/gabrielmittag/NISQA/blob/master/LICENSE)
+NISQA code is licensed under [MIT License](https://github.com/gabrielmittag/NISQA/blob/master/LICENSE_MIT)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-The model weights are licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-nc-nd/4.0/">Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International License</a>.<a rel="license" href="http://creativecommons.org/licenses/by-nc-nd/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by-nc-nd/4.0/88x31.png" /></a><br />
+The model weights are licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-nc-nd/4.0/">Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International License</a>.
+<a rel="license" href="http://creativecommons.org/licenses/by-nc-nd/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by-nc-nd/4.0/88x31.png" /></a><br />
 
 Copyright © 2019/2020 Quality and Usability Lab, TU Berlin  
 www.qu.tu-berlin.de
