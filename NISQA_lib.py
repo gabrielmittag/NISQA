@@ -2,7 +2,6 @@
 """
 @author: Gabriel Mittag, TU-Berlin
 """
-
 import os
 import multiprocessing
 import copy
@@ -15,14 +14,11 @@ import matplotlib.pyplot as plt
 
 from tqdm import tqdm
 from scipy.stats import pearsonr
-from scipy.stats import spearmanr
 from scipy.optimize import minimize
-from scipy.optimize import least_squares
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils.rnn import pack_sequence
 from torch.nn.utils.rnn import pad_packed_sequence
 from torch.nn.utils.rnn import pack_padded_sequence
 from torch.nn.utils.rnn import PackedSequence
@@ -32,6 +28,12 @@ from torch.utils.data import Dataset
 
 #%% Models
 class NISQA(nn.Module):
+    '''
+    NISQA: The main speech quality model without speech quality dimension 
+    estimation (MOS only). The module loads the submodules for framewise 
+    modelling (e.g. CNN), time-dependency modelling (e.g. Self-Attention     
+    or LSTM), and pooling (e.g. max-pooling or attention-pooling)                                                  
+    '''       
     def __init__(self,
             ms_seg_length=15,
             ms_n_mels=48,
@@ -50,7 +52,6 @@ class NISQA(nn.Module):
             td='self_att',
             td_sa_d_model=64,
             td_sa_nhead=1,
-            td_sa_pool_size=None,
             td_sa_pos_enc=None,
             td_sa_num_layers=2,
             td_sa_h=64,
@@ -63,7 +64,6 @@ class NISQA(nn.Module):
             td_2='skip',
             td_2_sa_d_model=None,
             td_2_sa_nhead=None,
-            td_2_sa_pool_size=None,
             td_2_sa_pos_enc=None,
             td_2_sa_num_layers=None,
             td_2_sa_h=None,
@@ -74,17 +74,15 @@ class NISQA(nn.Module):
             td_2_lstm_bidirectional=None,            
             
             pool='att',
-            pool_output_size=1,
             pool_att_h=128,
             pool_att_dropout=0.1,
                
             ):
-        
         super().__init__()
     
         self.name = 'NISQA'
         
-        self.cnn = CNN(
+        self.cnn = Framewise(
             cnn_model,
             ms_seg_length=ms_seg_length,
             ms_n_mels=ms_n_mels,
@@ -104,7 +102,6 @@ class NISQA(nn.Module):
             td=td,
             sa_d_model=td_sa_d_model,
             sa_nhead=td_sa_nhead,
-            sa_pool_size=td_sa_pool_size,
             sa_pos_enc=td_sa_pos_enc,
             sa_num_layers=td_sa_num_layers,
             sa_h=td_sa_h,
@@ -115,13 +112,11 @@ class NISQA(nn.Module):
             lstm_bidirectional=td_lstm_bidirectional
             )
         
-        
         self.time_dependency_2 = TimeDependency(
             input_size=self.time_dependency.fan_out,
             td=td_2,
             sa_d_model=td_2_sa_d_model,
             sa_nhead=td_2_sa_nhead,
-            sa_pool_size=td_2_sa_pool_size,
             sa_pos_enc=td_2_sa_pos_enc,
             sa_num_layers=td_2_sa_num_layers,
             sa_h=td_2_sa_h,
@@ -132,27 +127,31 @@ class NISQA(nn.Module):
             lstm_bidirectional=td_2_lstm_bidirectional
             )        
         
-        
         self.pool = Pooling(
             self.time_dependency_2.fan_out,
-            output_size=pool_output_size,
+            output_size=1,
             pool=pool,
             att_h=pool_att_h,
             att_dropout=pool_att_dropout,
             )                 
 
     def forward(self, x, n_wins):
-
         x = self.cnn(x, n_wins)
         x, n_wins = self.time_dependency(x, n_wins)
         x, n_wins = self.time_dependency_2(x, n_wins)
         x = self.pool(x, n_wins)
-        
         return x
     
 
 
 class NISQA_DIM(nn.Module):
+    '''
+    NISQA_DIM: The main speech quality model with speech quality dimension 
+    estimation (MOS, Noisiness, Coloration, Discontinuity, and Loudness).
+    The module loads the submodules for framewise modelling (e.g. CNN),
+    time-dependency modelling (e.g. Self-Attention or LSTM), and pooling 
+    (e.g. max-pooling or attention-pooling)                                                  
+    '''         
     def __init__(self,
             ms_seg_length=15,
             ms_n_mels=48,
@@ -171,7 +170,6 @@ class NISQA_DIM(nn.Module):
             td='self_att',
             td_sa_d_model=64,
             td_sa_nhead=1,
-            td_sa_pool_size=None,
             td_sa_pos_enc=None,
             td_sa_num_layers=2,
             td_sa_h=64,
@@ -184,7 +182,6 @@ class NISQA_DIM(nn.Module):
             td_2='skip',
             td_2_sa_d_model=None,
             td_2_sa_nhead=None,
-            td_2_sa_pool_size=None,
             td_2_sa_pos_enc=None,
             td_2_sa_num_layers=None,
             td_2_sa_h=None,
@@ -195,17 +192,15 @@ class NISQA_DIM(nn.Module):
             td_2_lstm_bidirectional=None,               
 
             pool='att',
-            pool_output_size=1,
             pool_att_h=128,
             pool_att_dropout=0.1,
             
             ):
-        
         super().__init__()
     
-        self.name = 'NISQA'
+        self.name = 'NISQA_DIM'
         
-        self.cnn = CNN(
+        self.cnn = Framewise(
             cnn_model,
             ms_seg_length=ms_seg_length,
             ms_n_mels=ms_n_mels,
@@ -225,7 +220,6 @@ class NISQA_DIM(nn.Module):
             td=td,
             sa_d_model=td_sa_d_model,
             sa_nhead=td_sa_nhead,
-            sa_pool_size=td_sa_pool_size,
             sa_pos_enc=td_sa_pos_enc,
             sa_num_layers=td_sa_num_layers,
             sa_h=td_sa_h,
@@ -238,25 +232,21 @@ class NISQA_DIM(nn.Module):
         
         pool = Pooling(
             self.time_dependency.fan_out,
-            output_size=pool_output_size,
+            output_size=1,
             pool=pool,
             att_h=pool_att_h,
             att_dropout=pool_att_dropout,
             )         
         
-        
         self.pool_layers = self._get_clones(pool, 5)
-
         
     def _get_clones(self, module, N):
         return nn.ModuleList([copy.deepcopy(module) for i in range(N)])        
-        
 
     def forward(self, x, n_wins):
-
+        
         x = self.cnn(x, n_wins)
         x, n_wins = self.time_dependency(x, n_wins)
-        
         out = [mod(x, n_wins) for mod in self.pool_layers]
         out = torch.cat(out, dim=1)
 
@@ -265,6 +255,12 @@ class NISQA_DIM(nn.Module):
 
     
 class NISQA_DE(nn.Module):
+    '''
+    NISQA: The main speech quality model for double-ended prediction.
+    The module loads the submodules for framewise modelling (e.g. CNN), 
+    time-dependency modelling (e.g. Self-Attention or LSTM), time-alignment, 
+    feature fusion and pooling (e.g. max-pooling or attention-pooling)                                                  
+    '''         
     def __init__(self,
             ms_seg_length=15,
             ms_n_mels=48,
@@ -283,7 +279,6 @@ class NISQA_DE(nn.Module):
             td='self_att',
             td_sa_d_model=64,
             td_sa_nhead=1,
-            td_sa_pool_size=None,
             td_sa_pos_enc=None,
             td_sa_num_layers=2,
             td_sa_h=64,
@@ -296,7 +291,6 @@ class NISQA_DE(nn.Module):
             td_2='skip',
             td_2_sa_d_model=None,
             td_2_sa_nhead=None,
-            td_2_sa_pool_size=None,
             td_2_sa_pos_enc=None,
             td_2_sa_num_layers=None,
             td_2_sa_h=None,
@@ -307,13 +301,11 @@ class NISQA_DE(nn.Module):
             td_2_lstm_bidirectional=None,               
             
             pool='att',
-            pool_output_size=1,
             pool_att_h=128,
             pool_att_dropout=0.1,
             
             de_align = 'dot',
             de_align_apply = 'hard',
-            de_align_dim = None,
             de_fuse_dim = None,
             de_fuse = True,         
                
@@ -321,9 +313,9 @@ class NISQA_DE(nn.Module):
         
         super().__init__()
     
-        self.name = 'NISQA'
+        self.name = 'NISQA_DE'
         
-        self.cnn = CNN(
+        self.cnn = Framewise(
             cnn_model,
             ms_seg_length=ms_seg_length,
             ms_n_mels=ms_n_mels,
@@ -343,7 +335,6 @@ class NISQA_DE(nn.Module):
             td=td,
             sa_d_model=td_sa_d_model,
             sa_nhead=td_sa_nhead,
-            sa_pool_size=td_sa_pool_size,
             sa_pos_enc=td_sa_pos_enc,
             sa_num_layers=td_sa_num_layers,
             sa_h=td_sa_h,
@@ -354,15 +345,13 @@ class NISQA_DE(nn.Module):
             lstm_bidirectional=td_lstm_bidirectional
             )
         
-        self.align = Attention(
+        self.align = Alignment(
              de_align, 
              de_align_apply,
              q_dim=self.time_dependency.fan_out,
              y_dim=self.time_dependency.fan_out,
-             att_dim=de_align_dim,                
             )
                 
-        
         self.fuse = Fusion(
             in_feat=self.time_dependency.fan_out,
             fuse_dim=de_fuse_dim, 
@@ -374,7 +363,6 @@ class NISQA_DE(nn.Module):
             td=td_2,
             sa_d_model=td_2_sa_d_model,
             sa_nhead=td_2_sa_nhead,
-            sa_pool_size=td_2_sa_pool_size,
             sa_pos_enc=td_2_sa_pos_enc,
             sa_num_layers=td_2_sa_num_layers,
             sa_h=td_2_sa_h,
@@ -387,12 +375,11 @@ class NISQA_DE(nn.Module):
         
         self.pool = Pooling(
             self.time_dependency_2.fan_out,
-            output_size=pool_output_size,
+            output_size=1,
             pool=pool,
             att_h=pool_att_h,
             att_dropout=pool_att_dropout,
             )                 
-
         
     def _split_ref_deg(self, x, n_wins):
         (x, y) = torch.chunk(x, 2, dim=2)        
@@ -404,7 +391,7 @@ class NISQA_DE(nn.Module):
     def forward(self, x, n_wins):
         
         x, y, n_wins_x, n_wins_y = self._split_ref_deg(x, n_wins)
-    
+        
         x = self.cnn(x, n_wins_x)
         y = self.cnn(y, n_wins_y)
         
@@ -421,13 +408,17 @@ class NISQA_DE(nn.Module):
         
         return x
     
-      
-
-      
-
     
-#%% CNN
-class CNN(nn.Module):
+#%% Framewise
+class Framewise(nn.Module):
+    '''
+    Framewise: The main framewise module. It loads either a CNN or feed-forward
+    network for framewise modelling of the Mel-spec segments. This module can
+    also be skipped by loading the SkipCNN module. There are two CNN modules
+    available. AdaptCNN with adaptive maxpooling and the StandardCNN module.
+    However, they could also be replaced with new modules, such as PyTorch 
+    implementations of ResNet or Alexnet.                                                 
+    '''         
     def __init__(
         self, 
         cnn_model,
@@ -470,11 +461,13 @@ class CNN(nn.Module):
                 kernel_size=kernel_size, 
                 dropout=dropout,
                 fc_out_h=fc_out_h,
-                )            
+                )       
+        elif cnn_model=='dff':
+            self.model = DFF(ms_seg_length, ms_n_mels, dropout, fc_out_h)            
         elif (cnn_model is None) or (cnn_model=='skip'):
             self.model = SkipCNN(ms_seg_length, ms_n_mels, fc_out_h)
         else:
-            raise NotImplementedError('CNN model not available')                        
+            raise NotImplementedError('Framwise model not available')                        
         
     def forward(self, x, n_wins):
         (bs, length, channels, height, width) = x.shape
@@ -495,10 +488,14 @@ class CNN(nn.Module):
             x, 
             batch_first=True, 
             padding_value=0.0,
-            total_length=n_wins.max())     
+            total_length=n_wins.max())
         return x    
 
 class SkipCNN(nn.Module):
+    '''
+    SkipCNN: Can be used to skip the framewise modelling stage and directly
+    apply an LSTM or Self-Attention network.                                              
+    '''        
     def __init__(
         self, 
         cnn_seg_length,
@@ -507,26 +504,81 @@ class SkipCNN(nn.Module):
         ):
         super().__init__()
 
-        self.name = 'No_CNN'
+        self.name = 'SkipCNN'
         self.cnn_seg_length = cnn_seg_length
         self.ms_n_mels = ms_n_mels
         self.fan_in = cnn_seg_length*ms_n_mels
+        self.bn = nn.BatchNorm2d( 1 )
         
         if fc_out_h is not None:
-            self.linear = nn.Linear(self.fan_out, fc_out_h)
+            self.linear = nn.Linear(self.fan_in, fc_out_h)
             self.fan_out = fc_out_h
         else:
             self.linear = nn.Identity()
             self.fan_out = self.fan_in
         
     def forward(self, x):
-        x = x.view(-1, self.fan_out)
+        x = self.bn(x)
+        x = x.view(-1, self.fan_in)
         x = self.linear(x)
         return x    
     
-    
+class DFF(nn.Module):
+    '''
+    DFF: Deep Feed-Forward network that was used as baseline framwise model as
+    comparision to the CNN.
+    '''        
+    def __init__(self, 
+                 cnn_seg_length,
+                 ms_n_mels,
+                 dropout,
+                 fc_out_h=4096,
+                 ):
+        super().__init__()
+        self.name = 'DFF'
+
+        self.dropout_rate = dropout
+        self.fc_out_h = fc_out_h
+        self.fan_out = fc_out_h
+        
+        self.cnn_seg_length = cnn_seg_length
+        self.ms_n_mels = ms_n_mels
+        self.fan_in = cnn_seg_length*ms_n_mels
+        
+        self.lin1 = nn.Linear(self.fan_in, self.fc_out_h)
+        self.lin2 = nn.Linear(self.fc_out_h, self.fc_out_h)
+        self.lin3 = nn.Linear(self.fc_out_h, self.fc_out_h)
+        self.lin4 = nn.Linear(self.fc_out_h, self.fc_out_h)
+        
+        self.bn1 = nn.BatchNorm2d(1)
+        self.bn2 = nn.BatchNorm1d( self.fc_out_h )
+        self.bn3 = nn.BatchNorm1d( self.fc_out_h )
+        self.bn4 = nn.BatchNorm1d( self.fc_out_h )
+        self.bn5 = nn.BatchNorm1d( self.fc_out_h )
+        self.dropout = nn.Dropout(p=dropout)
+
+    def forward(self, x):
+        
+        x = self.bn1(x)
+        x = x.view(-1, self.fan_in)
+        
+        x = F.relu( self.bn2( self.lin1(x) ) )
+        x = self.dropout(x)
+        x = F.relu( self.bn3( self.lin2(x) ) )
+        x = self.dropout(x)
+        x = F.relu( self.bn4( self.lin3(x) ) )
+        x = self.dropout(x)
+        x = F.relu( self.bn5( self.lin4(x) ) )
+                
+        return x
+        
     
 class AdaptCNN(nn.Module):
+    '''
+    AdaptCNN: CNN with adaptive maxpooling that can be used as framewise model.
+    Overall, it has six convolutional layers. This CNN module is more flexible
+    than the StandardCNN that requires a fixed input dimension of 48x15.
+    '''            
     def __init__(self, 
                  input_channels,
                  c_out_1, 
@@ -539,7 +591,6 @@ class AdaptCNN(nn.Module):
                  pool_3,
                  fc_out_h=20,
                  ):
-        
         super().__init__()
         self.name = 'CNN_adapt'
 
@@ -625,41 +676,35 @@ class AdaptCNN(nn.Module):
             self.fan_out = (self.conv6.out_channels * self.pool_3[0])
 
     def forward(self, x):
-        # print(x.shape)
+        
         x = F.relu( self.bn1( self.conv1(x) ) )
-        # print(x.shape)
         x = F.adaptive_max_pool2d(x, output_size=(self.pool_1))
-        # print(x.shape)
 
         x = F.relu( self.bn2( self.conv2(x) ) )
         x = F.adaptive_max_pool2d(x, output_size=(self.pool_2))
-        # print(x.shape)
         
         x = self.dropout(x)
         x = F.relu( self.bn3( self.conv3(x) ) )
-        # print(x.shape)
         x = self.dropout(x)
         x = F.relu( self.bn4( self.conv4(x) ) )
-        # print(x.shape)
         x = F.adaptive_max_pool2d(x, output_size=(self.pool_3))
-        # print(x.shape)
-
 
         x = self.dropout(x)
         x = F.relu( self.bn5( self.conv5(x) ) )
-        # print(x.shape)
         x = self.dropout(x)
         x = F.relu( self.bn6( self.conv6(x) ) )
-        # print(x.shape)
         x = x.view(-1, self.conv6.out_channels * self.pool_3[0])
-        # print(x.shape)
         
         if self.fc_out_h:
             x = self.fc( x ) 
         return x
-    
 
 class StandardCNN(nn.Module):
+    '''
+    StandardCNN: CNN with fixed maxpooling that can be used as framewise model.
+    Overall, it has six convolutional layers. This CNN module requires a fixed
+    input dimension of 48x15.
+    '''           
     def __init__(
         self, 
         input_channels, 
@@ -752,7 +797,6 @@ class StandardCNN(nn.Module):
             self.fan_out = self.fc_out_h
         else:
             self.fan_out = (self.conv6.out_channels * self.output_height * self.output_width)
-            
 
     def forward(self, x):
         
@@ -781,17 +825,18 @@ class StandardCNN(nn.Module):
 
         return x
     
-    
-    
-    
 #%% Time Dependency
 class TimeDependency(nn.Module):
+    '''
+    TimeDependency: The main time-dependency module. It loads either an LSTM 
+    or self-attention network for time-dependency modelling of the framewise 
+    features. This module can also be skipped.                                              
+    '''          
     def __init__(self,
                  input_size,
                  td='self_att',
                  sa_d_model=512,
                  sa_nhead=8,
-                 sa_pool_size=3,
                  sa_pos_enc=None,
                  sa_num_layers=6,
                  sa_h=2048,
@@ -808,7 +853,6 @@ class TimeDependency(nn.Module):
                 input_size=input_size,
                 d_model=sa_d_model,
                 nhead=sa_nhead,
-                pool_size=sa_pool_size,
                 pos_enc=sa_pos_enc,
                 num_layers=sa_num_layers,
                 sa_h=sa_h,
@@ -839,9 +883,11 @@ class TimeDependency(nn.Module):
     def forward(self, x, n_wins):
         x, n_wins = self.model(x, n_wins)
         return x, n_wins
-
                 
 class LSTM(nn.Module):
+    '''
+    LSTM: The main LSTM module that can be used as a time-dependency model.                                            
+    '''           
     def __init__(self,
                  input_size,
                  lstm_h=128,
@@ -886,9 +932,11 @@ class LSTM(nn.Module):
   
         return x, n_wins
 
-
-
 class SelfAttention(nn.Module):
+    '''
+    SelfAttention: The main SelfAttention module that can be used as a
+    time-dependency model.                                            
+    '''         
     def __init__(self,
                  input_size,
                  d_model=512,
@@ -937,13 +985,13 @@ class SelfAttention(nn.Module):
             output, n_wins = mod(output, n_wins=n_wins)
         return output.transpose(1,0), n_wins
 
-
 class SelfAttentionLayer(nn.Module):
+    '''
+    SelfAttentionLayer: The SelfAttentionLayer that is used by the
+    SelfAttention module.                                            
+    '''          
     def __init__(self, d_model, nhead, pool_size=1, sa_h=2048, dropout=0.1, activation="relu"):
         super().__init__()
-        if pool_size is None:
-            pool_size = 1
-        self.pool_size = pool_size
         
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
         
@@ -956,11 +1004,6 @@ class SelfAttentionLayer(nn.Module):
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
         
-        if self.pool_size==1:
-            self.maxpool = nn.Identity()
-        else:
-            self.maxpool = nn.MaxPool1d(self.pool_size, ceil_mode=True)
-
         self.activation = self._get_activation_fn(activation)
         
     def _get_activation_fn(self, activation):
@@ -982,15 +1025,16 @@ class SelfAttentionLayer(nn.Module):
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
         src = src + self.dropout2(src2)
 
-        src = self.maxpool(src.permute(1,2,0)).permute(2,0,1)
-        n_wins = torch.ceil(torch.true_divide(n_wins, self.pool_size)).to(torch.int)
-        
         src = self.norm2(src)
 
         return src, n_wins
     
 class PositionalEncoding(nn.Module):
-
+    '''
+    PositionalEncoding: PositionalEncoding taken from the PyTorch Transformer
+    tutorial. Can be applied to the SelfAttention module. However, it did not 
+    improve the results in previous experiments.                          
+    '''       
     def __init__(self, d_model, dropout=0.1, max_len=3000):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
@@ -1006,12 +1050,14 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         x = x + self.pe[:x.size(0), :]
         return self.dropout(x)    
-    
-    
 
 #%% Pooling
-
 class Pooling(nn.Module):
+    '''
+    Pooling: Main Pooling module. It can load either attention-pooling, average
+    pooling, maxpooling, or last-step pooling. In case of bidirectional LSTMs
+    last-step-bi pooling should be used instead of last-step pooling.
+    '''      
     def __init__(self,
                  d_input,
                  output_size=1,
@@ -1040,8 +1086,10 @@ class Pooling(nn.Module):
     def forward(self, x, n_wins):
         return self.model(x, n_wins)
     
-
 class PoolLastStepBi(nn.Module):
+    '''
+    PoolLastStepBi: last step pooling for the case of bidirectional LSTM
+    '''       
     def __init__(self, input_size, output_size):
         super().__init__() 
         self.linear = nn.Linear(input_size, output_size)
@@ -1057,6 +1105,10 @@ class PoolLastStepBi(nn.Module):
         return x    
     
 class PoolLastStep(nn.Module):
+    '''
+    PoolLastStep: last step pooling can be applied to any one-directional 
+    sequence.
+    '''      
     def __init__(self, input_size, output_size):
         super().__init__() 
         self.linear = nn.Linear(input_size, output_size)
@@ -1065,11 +1117,11 @@ class PoolLastStep(nn.Module):
         x = x[torch.arange(x.shape[0]), n_wins.type(torch.long)-1]
         x = self.linear(x)
         return x        
-    
-
-
 
 class PoolAtt(torch.nn.Module):
+    '''
+    PoolAtt: Attention-Pooling module.
+    '''          
     def __init__(self, d_input, output_size):
         super().__init__()
         
@@ -1091,8 +1143,10 @@ class PoolAtt(torch.nn.Module):
             
         return x
     
-    
 class PoolAttFF(torch.nn.Module):
+    '''
+    PoolAttFF: Attention-Pooling module with additonal feed-forward network.
+    '''         
     def __init__(self, d_input, output_size, h, dropout=0.1):
         super().__init__()
         
@@ -1119,6 +1173,9 @@ class PoolAttFF(torch.nn.Module):
         return x    
 
 class PoolAvg(torch.nn.Module):
+    '''
+    PoolAvg: Average pooling that consideres masked time-steps.
+    '''          
     def __init__(self, d_input, output_size):
         super().__init__()
         
@@ -1136,8 +1193,10 @@ class PoolAvg(torch.nn.Module):
         
         return x
     
-    
 class PoolMax(torch.nn.Module):
+    '''
+    PoolMax: Max-pooling that consideres masked time-steps.
+    '''        
     def __init__(self, d_input, output_size):
         super().__init__()
         
@@ -1155,16 +1214,17 @@ class PoolMax(torch.nn.Module):
             
         return x    
     
-    
-
 #%% Alignment
-class Attention(torch.nn.Module):
+class Alignment(torch.nn.Module):
+    '''
+    Alignment: Alignment module for the double-ended NISQA_DE model. It 
+    supports five different alignment mechanisms.
+    '''       
     def __init__(self,
                  att_method,
                  apply_att_method,
                  q_dim=None,
                  y_dim=None,
-                 att_dim=None
                  ):
         super().__init__()
     
@@ -1172,8 +1232,7 @@ class Attention(torch.nn.Module):
         if att_method=='bahd':
             self.att = AttBahdanau(
                     q_dim=q_dim,
-                    y_dim=y_dim, 
-                    att_dim=att_dim) 
+                    y_dim=y_dim) 
             
         elif att_method=='luong':
             self.att = AttLuong(
@@ -1197,7 +1256,6 @@ class Attention(torch.nn.Module):
         # Apply method ----------------------------------------------------------
         if apply_att_method=='soft':
             self.apply_att = ApplySoftAttention() 
-            
         elif apply_att_method=='hard':
             self.apply_att = ApplyHardAttention() 
         else:
@@ -1216,11 +1274,14 @@ class Attention(torch.nn.Module):
         return y        
 
 class AttDot(torch.nn.Module):
+    '''
+    AttDot: Dot attention that can be used by the Alignment module.
+    '''       
     def __init__(self, softmax=True):
         super().__init__()
         self.softmax = softmax
                 
-    def forward(self, query, y, att_dim=None):
+    def forward(self, query, y):
         att = torch.bmm(query, y.transpose(2,1))
         sim = att.max(2)[0].unsqueeze(1)
         
@@ -1230,23 +1291,28 @@ class AttDot(torch.nn.Module):
         return att, sim
     
 class AttCosine(torch.nn.Module):
+    '''
+    AttCosine: Cosine attention that can be used by the Alignment module.
+    '''          
     def __init__(self, softmax=True):
         super().__init__()
         self.softmax = softmax
         self.pdist = nn.CosineSimilarity(dim=3)
         
-    def forward(self, query, y, att_dim=None):
+    def forward(self, query, y):
         
-        att = self.pdist(query.unsqueeze(1), y.unsqueeze(2))
+        att = self.pdist(query.unsqueeze(2), y.unsqueeze(1))
         sim = att.max(2)[0].unsqueeze(1)
         
         if self.softmax:
             att = F.softmax(att, dim=2)
             
         return att, sim    
-
     
 class AttDistance(torch.nn.Module):
+    '''
+    AttDistance: Distance attention that can be used by the Alignment module.
+    '''        
     def __init__(self, dist_norm=1, weight_norm=1):
         super().__init__()
         self.dist_norm = dist_norm
@@ -1259,8 +1325,11 @@ class AttDistance(torch.nn.Module):
         att = F.softmax(att, dim=2)
         return att, sim
     
-    
 class AttBahdanau(torch.nn.Module):
+    '''
+    AttBahdanau: Attention according to Bahdanau that can be used by the 
+    Alignment module.
+    ''' 
     def __init__(self, q_dim, y_dim, att_dim=128):
         super().__init__()
         self.q_dim = q_dim
@@ -1277,6 +1346,10 @@ class AttBahdanau(torch.nn.Module):
         return att, sim
 
 class AttLuong(torch.nn.Module):
+    '''
+    AttLuong: Attention according to Luong that can be used by the 
+    Alignment module.
+    '''     
     def __init__(self, q_dim, y_dim, softmax=True):
         super().__init__()
         self.q_dim = q_dim
@@ -1291,6 +1364,9 @@ class AttLuong(torch.nn.Module):
         return att, sim
 
 class ApplyHardAttention(torch.nn.Module):
+    '''
+    ApplyHardAttention: Apply hard attention for the purpose of time-alignment.
+    '''       
     def __init__(self):
         super().__init__()
     def forward(self, y, att):        
@@ -1299,6 +1375,9 @@ class ApplyHardAttention(torch.nn.Module):
         return y    
     
 class ApplySoftAttention(torch.nn.Module):
+    '''
+    ApplySoftAttention: Apply soft attention for the purpose of time-alignment.
+    '''        
     def __init__(self):
         super().__init__()
     def forward(self, y, att):        
@@ -1306,24 +1385,20 @@ class ApplySoftAttention(torch.nn.Module):
         return y     
     
 class Fusion(torch.nn.Module):
+    '''
+    Fusion: Used by the double-ended NISQA_DE model and used to fuse the
+    degraded and reference features.
+    '''      
     def __init__(self, fuse_dim=None, in_feat=None, fuse=None):
         super().__init__()
         self.fuse_dim = fuse_dim
         self.fuse = fuse
 
         if self.fuse=='x/y/-':
-            self.fan_out = 3*in_feat
-        elif self.fuse=='*':
-             self.fan_out = in_feat            
+            self.fan_out = 3*in_feat        
         elif self.fuse=='+/-':
-             self.fan_out = 2*in_feat
-        elif self.fuse=='+/-/*':
-             self.fan_out = 3*in_feat    
-        elif self.fuse=='2-2/-2/*':
-             self.fan_out = 3*in_feat    
-        elif self.fuse=='2-2/-2/*/x':
-             self.fan_out = 4*in_feat                     
-        elif self.fuse==False:
+             self.fan_out = 2*in_feat                     
+        elif self.fuse=='x/y':
             self.fan_out = 2*in_feat
         else:
             raise NotImplementedError         
@@ -1332,21 +1407,12 @@ class Fusion(torch.nn.Module):
             self.lin_fusion = nn.Linear(self.fan_out, self.fuse_dim)
             self.fan_out = fuse_dim       
                         
-            
     def forward(self, x, y):
         
         if self.fuse=='x/y/-':
             x = torch.cat((x, y, x-y), 2)
-        elif self.fuse=='*':
-            x = x*y
         elif self.fuse=='+/-':
-            x = torch.cat((x+y, x-y), 2)    
-        elif self.fuse=='+/-/*':
-            x = torch.cat((x+y, x-y, x*y), 2)    
-        elif self.fuse=='2-2/-2/*':
-            x = torch.cat(( (x**2-y**2), (x-y)**2, x*y ), 2)    
-        elif self.fuse=='2-2/-2/*/x':
-            x = torch.cat(( (x**2-y**2), (x-y)**2, x*y, x ), 2)    
+            x = torch.cat((x+y, x-y), 2)     
         elif self.fuse=='x/y':
             x = torch.cat((x, y), 2)   
         else:
@@ -1357,9 +1423,12 @@ class Fusion(torch.nn.Module):
             
         return x
         
-        
 #%% Evaluation 
-def predict_mos(model, ds, bs, dev, num_workers=0):      
+def predict_mos(model, ds, bs, dev, num_workers=0):    
+    '''
+    predict_mos: predicts MOS of the given dataset with given model. Used for
+    NISQA and NISQA_DE model.
+    '''       
     dl = DataLoader(ds,
                     batch_size=bs,
                     shuffle=False,
@@ -1376,8 +1445,11 @@ def predict_mos(model, ds, bs, dev, num_workers=0):
     ds.df['mos_pred'] = y_hat.astype(dtype=float)
     return y_hat, y
 
-
 def predict_dim(model, ds, bs, dev, num_workers=0):     
+    '''
+    predict_dim: predicts MOS and dimensions of the given dataset with given 
+    model. Used for NISQA_DIM model.
+    '''        
     dl = DataLoader(ds,
                     batch_size=bs,
                     shuffle=False,
@@ -1401,7 +1473,6 @@ def predict_dim(model, ds, bs, dev, num_workers=0):
     
     return y_hat, y
 
-
 def is_const(x):
     if np.linalg.norm(x - np.mean(x)) < 1e-13 * np.abs(np.mean(x)):
         return True
@@ -1412,7 +1483,8 @@ def is_const(x):
     
 def calc_eval_metrics(y, y_hat, y_hat_map=None, d=None, ci=None):
     '''
-    Calculate RMSE, Pearson's correlation.
+    Calculate RMSE, mapped RMSE, mapped RMSE* and Pearson's correlation.
+    See ITU-T P.1401 for details on RMSE*.
     '''         
     r = {
         'r_p': np.nan,
@@ -1446,7 +1518,7 @@ def calc_rmse_star(mos_sub, mos_obj, ci, d):
     N = mos_sub.shape[0]
     error = mos_sub-mos_obj
 
-    if ci[0]==-1:
+    if np.isnan(ci).any():
         p_error = np.nan
         rmse_star = np.nan
     else:
@@ -1489,7 +1561,6 @@ def fit_third_order(y_con, y_con_hat):
         print('Not monotonic!!!')    
     return b
 
-
 def fit_monotonic_third_order(
         dfile_db,
         dcon_db=None,
@@ -1497,7 +1568,10 @@ def fit_monotonic_third_order(
         target_mos=None,
         target_ci=None, 
         mapping=None):
-    
+    '''
+    Fits third-order function with the constrained to be monotonically.
+    increasing. This function may not return an optimal fitting.
+    '''        
     y = dfile_db[target_mos].to_numpy()
     
     y_hat = dfile_db[pred].to_numpy()
@@ -1519,7 +1593,6 @@ def fit_monotonic_third_order(
     y_hat_min = min(y_hat) - 0.01
     y_hat_max = max(y_hat) + 0.01
  
-
     def polynomial(p, x):
         return p[0]+p[1]*x+p[2]*x**2+p[3]*x**3
 
@@ -1581,7 +1654,9 @@ def calc_mapping(
         target_ci=None,
         pred=None,
         ):
-    
+    '''
+    Computes mapping between subjective and predicted MOS. 
+    '''       
     if dcon_db is not None:
         y = dcon_db[target_mos].to_numpy()        
         y_hat = dfile_db.groupby('con').mean().get(pred).to_numpy()
@@ -1598,10 +1673,10 @@ def calc_mapping(
     elif mapping=='second_order':
         b = fit_second_order(y, y_hat)            
         d_map = 3
-    elif mapping=='third_order':
+    elif mapping=='third_order_not_monotonic':
         b = fit_third_order(y, y_hat)            
         d_map = 4        
-    elif mapping=='monotonic_third_order':
+    elif mapping=='third_order':
         b = fit_monotonic_third_order(
             dfile_db,
             dcon_db=dcon_db, 
@@ -1616,19 +1691,6 @@ def calc_mapping(
     
     return b, d_map
 
-class earlyStopper(object):
-    '''
-    Early stopping class. 
-    
-    Training is stopped if neither RMSE or Pearson's correlation
-    is improving after "patience" epochs.
-    '''            
-    def __init__(self, patience):
-        self.best_rmse = 1e10
-        self.best_r_p = -1e10
-        self.cnt = -1
-        self.patience = patience
-        
 def eval_results(
         df,
         dcon=None, 
@@ -1656,16 +1718,11 @@ def eval_results(
         
         # per file -----------------------------------------------------------        
         y = df_db[target_mos].to_numpy()
-        if (y<0).any():
+        if np.isnan(y).any():
             r = {'r_p': np.nan,'r_s': np.nan,'rmse': np.nan,'r_p_map': np.nan,
-                 'r_s_map': np.nan,'rmse_map': np.nan,'rmse_star_map': np.nan}
+                 'r_s_map': np.nan,'rmse_map': np.nan}
         else:
             y_hat = df_db[pred].to_numpy()      
-            
-            if target_ci in df_db:
-                ci = df_db[target_ci].to_numpy()   
-            else:
-                ci = None
             
             b, d = calc_mapping(
                 df_db,
@@ -1676,7 +1733,8 @@ def eval_results(
                 )
             y_hat_map = calc_mapped(y_hat, b)
             
-            r = calc_eval_metrics(y, y_hat, y_hat_map=y_hat_map, d=d, ci=ci)
+            r = calc_eval_metrics(y, y_hat, y_hat_map=y_hat_map, d=d)
+            r.pop('rmse_star_map')
         r = {f'{k}_file': v for k, v in r.items()}
             
         # per con ------------------------------------------------------------
@@ -1688,7 +1746,7 @@ def eval_results(
             y_con = dcon_db[target_mos].to_numpy()
             y_con_hat = df_db.groupby('con').mean().get(pred).to_numpy()
 
-            if not (y_con<0).any():
+            if not np.isnan(y_con).any():
                 
                 if target_ci in dcon_db:
                     ci_con = dcon_db[target_ci].to_numpy()   
@@ -1717,7 +1775,7 @@ def eval_results(
         # ---------------------------------------------------------------------
         db_results_df.append({'db': db_name, **r})
         # Plot  ------------------------------------------------------------------
-        if do_plot and (y[0]!=-1):
+        if do_plot and (not np.isnan(y).any()):
             xx = np.arange(0, 6, 0.01)
             yy = calc_mapped(xx, b)            
         
@@ -1731,10 +1789,10 @@ def eval_results(
             plt.grid(True)
             plt.xticks(np.arange(1, 6))
             plt.yticks(np.arange(1, 6))
-            # plt.title(db_name + ' per file')
+            plt.title(db_name + ' per file')
             plt.ylabel('Subjective ' + target_mos.upper())
             plt.xlabel('Predicted ' + target_mos.upper())
-            plt.savefig('corr_diagram_fr_' + db_name + '.pdf', dpi=300, bbox_inches="tight")
+            # plt.savefig('corr_diagram_fr_' + db_name + '.pdf', dpi=300, bbox_inches="tight")
             plt.show()
 
                 
@@ -1760,9 +1818,13 @@ def eval_results(
                 plt.show()            
             
         # Print ------------------------------------------------------------------
-        if do_print and (y[0]!=-1):
-            print('%-30s r_p_con: %0.2f, rmse_con: %0.2f, r_p_file: %0.2f, rmse_file: %0.2f, rmse_star_map_con: %0.2f'
-                  % (db_name+':', r['r_p_con'], r['rmse_con'], r['r_p_file'], r['rmse_file'], r['rmse_star_map_con']))
+        if do_print and (not np.isnan(y).any()):
+            if (dcon_db is not None) and ('con' in df_db):
+                print('%-30s r_p_file: %0.2f, rmse_map_file: %0.2f, r_p_con: %0.2f, rmse_map_con: %0.2f, rmse_star_map_con: %0.2f'
+                      % (db_name+':', r['r_p_file'], r['rmse_map_file'], r['r_p_con'], r['rmse_map_con'], r['rmse_star_map_con']))
+            else:
+                print('%-30s r_p_file: %0.2f, rmse_map_file: %0.2f'
+                      % (db_name+':', r['r_p_file'], r['rmse_map_file']))
 
     # Save individual database results in DataFrame
     db_results_df = pd.DataFrame(db_results_df)
@@ -1771,8 +1833,7 @@ def eval_results(
     r_average['r_p_mean_file'] = db_results_df.r_p_file.mean()
     r_average['rmse_mean_file'] = db_results_df.rmse_file.mean()
     r_average['rmse_map_mean_file'] = db_results_df.rmse_map_file.mean()
-    r_average['rmse_star_map_mean_file'] = db_results_df.rmse_star_map_file.mean()    
-
+    
     if dcon_db is not None:
         r_average['r_p_mean_con'] = db_results_df.r_p_con.mean()
         r_average['rmse_mean_con'] = db_results_df.rmse_con.mean()
@@ -1787,13 +1848,9 @@ def eval_results(
     # Get overall per file results      
     y = df[target_mos].to_numpy()
     y_hat = df[pred].to_numpy()
-    
-    if target_ci in df:
-        ci = df[target_ci].to_numpy()  
-    else:
-        ci = None    
-        
-    r_total_file = calc_eval_metrics(y, y_hat, d=d, ci=ci)
+            
+    r_total_file = calc_eval_metrics(y, y_hat)
+    r_total_file = {'r_p_all': r_total_file['r_p'], 'rmse_all': r_total_file['rmse']} 
     
     overall_results = {
         **r_total_file,
@@ -1810,63 +1867,70 @@ class biasLoss(object):
     
     Calculates loss while considering database bias.
     '''    
-    def __init__(self, db, anchor_db=None, mapping='first_order', min_r=0.7, loss_weight=0.0, plot=False):
+    def __init__(self, db, anchor_db=None, mapping='first_order', min_r=0.7, loss_weight=0.0, do_print=True):
         
         self.db = db
         self.mapping = mapping
+        self.min_r = min_r
         self.anchor_db = anchor_db
         self.loss_weight = loss_weight
+        self.do_print = do_print
         
         self.b = np.zeros((len(db),4))
         self.b[:,1] = 1
         self.do_update = False
         
-        if min_r is None:
-            self.min_r = 1
-        else:
-            self.min_r = min_r
-            
-    def get_loss(self, yb, yb_hat, idx):
-        b = torch.tensor(self.b, dtype=torch.float).to(yb_hat.device)
-        b = b[idx,:]
+        self.apply_bias_loss = True
+        if (self.min_r is None) or (self.mapping is None):
+            self.apply_bias_loss = False
 
-        yb_hat_map = (b[:,0]+b[:,1]*yb_hat[:,0]+b[:,2]*yb_hat[:,0]**2+b[:,3]*yb_hat[:,0]**3).view(-1,1)
+    def get_loss(self, yb, yb_hat, idx):
         
-        loss_bias = self._nan_mse(yb_hat_map, yb)   
-        loss_normal = self._nan_mse(yb_hat, yb)           
-        
-        loss = loss_bias + self.loss_weight * loss_normal
+        if self.apply_bias_loss:
+            b = torch.tensor(self.b, dtype=torch.float).to(yb_hat.device)
+            b = b[idx,:]
+    
+            yb_hat_map = (b[:,0]+b[:,1]*yb_hat[:,0]+b[:,2]*yb_hat[:,0]**2+b[:,3]*yb_hat[:,0]**3).view(-1,1)
+            
+            loss_bias = self._nan_mse(yb_hat_map, yb)   
+            loss_normal = self._nan_mse(yb_hat, yb)           
+            
+            loss = loss_bias + self.loss_weight * loss_normal
+        else:
+            loss = self._nan_mse(yb_hat, yb)
 
         return loss
     
     def update_bias(self, y, y_hat):
-        y_hat = y_hat.reshape(-1)
-        y = y.reshape(-1)
         
-        if not self.do_update:
-            r = pearsonr(y[y!=-1], y_hat[y!=-1])[0]
-            print('pearson {:0.2f}'.format(r))
-            if r>self.min_r:
-                self.do_update = True
+        if self.apply_bias_loss:
+            y_hat = y_hat.reshape(-1)
+            y = y.reshape(-1)
             
-        if self.do_update:
-            print('--> bias updated')
-            for db_name in self.db.unique():
+            if not self.do_update:
+                r = pearsonr(y[y!=np.nan], y_hat[y!=np.nan])[0]
                 
-                db_idx = (self.db==db_name).to_numpy().nonzero()
-                y_hat_db = y_hat[db_idx]
-                y_db = y[db_idx]
+                if self.do_print:
+                    print('--> bias update: min_r {:0.2f}, r_p {:0.2f}'.format(r, self.min_r))
+                if r>self.min_r:
+                    self.do_update = True
                 
-                if y_db[0]!=-1:
-                
-                    if self.mapping=='first_order':
-                        b_db = self._calc_bias_first_order(y_hat_db, y_db, bounds=False)
-                    else:
-                        raise NotImplementedError
-                                    
-                    if not db_name==self.anchor_db:
-                        self.b[db_idx,:len(b_db)] = b_db                   
-                          
+            if self.do_update:
+                if self.do_print:
+                    print('--> bias updated')
+                for db_name in self.db.unique():
+                    
+                    db_idx = (self.db==db_name).to_numpy().nonzero()
+                    y_hat_db = y_hat[db_idx]
+                    y_db = y[db_idx]
+                    
+                    if not np.isnan(y_db).any():
+                        if self.mapping=='first_order':
+                            b_db = self._calc_bias_first_order(y_hat_db, y_db)
+                        else:
+                            raise NotImplementedError
+                        if not db_name==self.anchor_db:
+                            self.b[db_idx,:len(b_db)] = b_db                   
                 
     def _calc_bias_first_order(self, y_hat, y):
         A = np.vstack([np.ones(len(y_hat)), y_hat]).T
@@ -1880,9 +1944,6 @@ class biasLoss(object):
         idx_not_nan = ~torch.isnan(err)
         nan_err = err[idx_not_nan]
         return torch.mean(nan_err**2)    
-        
-                    
-
 
 #%% Early stopping 
 class earlyStopper(object):
@@ -1897,14 +1958,17 @@ class earlyStopper(object):
         self.best_r_p = -1e10
         self.cnt = -1
         self.patience = patience
+        self.best = False
         
     def step(self, r):
-        if r['r_p_mean_con'] > self.best_r_p:
-            self.best_r_p = r['r_p_mean_con']
+        self.best = False
+        if r['r_p_mean_file'] > self.best_r_p:
+            self.best_r_p = r['r_p_mean_file']
             self.cnt = -1   
-        if r['rmse_star_map_mean_con'] < self.best_rmse:
-            self.best_rmse = r['rmse_star_map_mean_con']
-            self.cnt = -1                  
+        if r['rmse_map_mean_file'] < self.best_rmse:
+            self.best_rmse = r['rmse_map_mean_file']
+            self.cnt = -1    
+            self.best = True
         self.cnt += 1 
 
         if self.cnt >= self.patience:
@@ -1916,7 +1980,7 @@ class earlyStopper(object):
         
 class earlyStopper_dim(object):
     '''
-    Early stopping class. 
+    Early stopping class for dimension model. 
     
     Training is stopped if neither RMSE or Pearson's correlation
     is improving after "patience" epochs.
@@ -1937,39 +2001,43 @@ class earlyStopper_dim(object):
     
         self.cnt = -1
         self.patience = patience
+        self.best = False
         
     def step(self, r):
         
-        if r['r_p_mean_con'] > self.best_r_p:
-            self.best_r_p = r['r_p_mean_con']
+        self.best = False
+        
+        if r['r_p_mean_file'] > self.best_r_p:
+            self.best_r_p = r['r_p_mean_file']
             self.cnt = -1   
-        if r['r_p_mean_con_noi'] > self.best_r_p_noi:
-            self.best_r_p_noi = r['r_p_mean_con_noi']
+        if r['r_p_mean_file_noi'] > self.best_r_p_noi:
+            self.best_r_p_noi = r['r_p_mean_file_noi']
             self.cnt = -1               
-        if r['r_p_mean_con_col'] > self.best_r_p_col:
-            self.best_r_p_col = r['r_p_mean_con_col']
+        if r['r_p_mean_file_col'] > self.best_r_p_col:
+            self.best_r_p_col = r['r_p_mean_file_col']
             self.cnt = -1   
-        if r['r_p_mean_con_dis'] > self.best_r_p_dis:
-            self.best_r_p_dis = r['r_p_mean_con_dis']
+        if r['r_p_mean_file_dis'] > self.best_r_p_dis:
+            self.best_r_p_dis = r['r_p_mean_file_dis']
             self.cnt = -1   
-        if r['r_p_mean_con_loud'] > self.best_r_p_loud:
-            self.best_r_p_loud = r['r_p_mean_con_loud']
+        if r['r_p_mean_file_loud'] > self.best_r_p_loud:
+            self.best_r_p_loud = r['r_p_mean_file_loud']
             self.cnt = -1   
             
-        if r['rmse_star_map_mean_con'] < self.best_rmse:
-            self.best_rmse = r['rmse_star_map_mean_con']
+        if r['rmse_map_mean_file'] < self.best_rmse:
+            self.best_rmse = r['rmse_map_mean_file']
             self.cnt = -1
-        if r['rmse_star_map_mean_con_noi'] < self.best_rmse_noi:
-            self.best_rmse_noi = r['rmse_star_map_mean_con_noi']
+            self.best = True
+        if r['rmse_map_mean_file_noi'] < self.best_rmse_noi:
+            self.best_rmse_noi = r['rmse_map_mean_file_noi']
             self.cnt = -1
-        if r['rmse_star_map_mean_con_col'] < self.best_rmse_col:
-            self.best_rmse_col = r['rmse_star_map_mean_con_col']
+        if r['rmse_map_mean_file_col'] < self.best_rmse_col:
+            self.best_rmse_col = r['rmse_map_mean_file_col']
             self.cnt = -1
-        if r['rmse_star_map_mean_con_dis'] < self.best_rmse_dis:
-            self.best_rmse_dis = r['rmse_star_map_mean_con_dis']
+        if r['rmse_map_mean_file_dis'] < self.best_rmse_dis:
+            self.best_rmse_dis = r['rmse_map_mean_file_dis']
             self.cnt = -1
-        if r['rmse_star_map_mean_con_loud'] < self.best_rmse_loud:
-            self.best_rmse_loud = r['rmse_star_map_mean_con_loud']
+        if r['rmse_map_mean_file_loud'] < self.best_rmse_loud:
+            self.best_rmse_loud = r['rmse_map_mean_file_loud']
             self.cnt = -1
            
         self.cnt += 1 
@@ -1980,7 +2048,6 @@ class earlyStopper_dim(object):
         else:
             stop_early = False
             return stop_early        
-        
 
 def get_lr(optimizer):
     '''
@@ -1988,7 +2055,6 @@ def get_lr(optimizer):
     '''         
     for param_group in optimizer.param_groups:
         return param_group['lr']
-
 
 #%% Dataset
 class SpeechQualityDataset(Dataset):
@@ -2069,16 +2135,10 @@ class SpeechQualityDataset(Dataset):
     def _load_spec(self, index):
         
             # Load spec    
-            if self.folder_column:
-                file_path = os.path.join(self.df[self.folder_column].iloc[index], 
-                                         self.df[self.filename_column].iloc[index])
-                if self.double_ended:
-                    file_path_ref = os.path.join(self.df[self.folder_column].iloc[index], 
-                                             self.df[self.filename_column_ref].iloc[index])                    
-            else:
-                file_path = os.path.join(self.data_dir, self.df[self.filename_column].iloc[index])
-                if self.double_ended:
-                    file_path_ref = os.path.join(self.data_dir, self.df[self.filename_column_ref].iloc[index])
+            file_path = os.path.join(self.data_dir, self.df[self.filename_column].iloc[index])
+
+            if self.double_ended:
+                file_path_ref = os.path.join(self.data_dir, self.df[self.filename_column_ref].iloc[index])
        
             spec = get_librosa_melspec(
                 file_path,
@@ -2158,7 +2218,6 @@ class SpeechQualityDataset(Dataset):
             x_spec_seg = torch.cat((x_spec_seg, x_spec_seg_ref), dim=1)
             n_wins = np.concatenate((n_wins.reshape(1), n_wins_ref.reshape(1)), axis=0)            
 
-
         # Get MOS
         if self.dim:
             if self.mos_column is not None:
@@ -2168,7 +2227,6 @@ class SpeechQualityDataset(Dataset):
                 y_col = self.df['col'].iloc[index].reshape(-1).astype('float32')                
                 y_loud = self.df['loud'].iloc[index].reshape(-1).astype('float32')                
                 y = np.concatenate((y_mos, y_noi, y_dis, y_col, y_loud), axis=0)
-                y[y==-1] = np.nan
             else:
                 y = np.full((5,1), np.nan).reshape(-1).astype('float32')
         else:
@@ -2216,7 +2274,7 @@ def segment_specs(file_path, x, seg_length, seg_hop=1, max_length=None):
         
     if max_length is not None:
         if max_length < n_wins:
-            raise ValueError('n_wins {} > max_length {} --- {}'.format(n_wins, max_length, file_path))
+            raise ValueError('n_wins {} > max_length {} --- {}. Increase max window length ms_max_segments!'.format(n_wins, max_length, file_path))
         x_padded = torch.zeros((max_length, x.shape[1], x.shape[2], x.shape[3]))
         x_padded[:n_wins,:] = x
         x = x_padded
@@ -2239,7 +2297,6 @@ def get_librosa_melspec(
         y, sr = lb.load(file_path, sr=sr)
     except:
         raise ValueError('Could not load file {}'.format(file_path))
-            
     
     hop_length = int(sr * hop_length)
     win_length = int(sr * win_length)
