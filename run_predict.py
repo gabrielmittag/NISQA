@@ -2,7 +2,7 @@
 """
 @author: Gabriel Mittag, TU-Berlin
 """
-from NISQA_model import nisqaModel
+from nisqa.NISQA_model import nisqaModel
 import argparse
 
 parser = argparse.ArgumentParser()

@@ -6,7 +6,7 @@ Created on Mon Apr 27 16:52:15 2020
 """
 
 import yaml
-from NISQA_model import nisqaModel
+from nisqa.NISQA_model import nisqaModel
 import argparse
 
 parser = argparse.ArgumentParser()
