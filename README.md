@@ -1,4 +1,6 @@
-# NISQA
+# NISQA: Speech Quality and Speech Naturalness Assessment
+
+*+++ News: The NISQA model has recently been updated to NISQA v2.0. The new version offers multidimensional predictions with higher accuracy and allows for training and finetuning the model.*
 
 NISQA is a deep learning model/framework for speech quality prediction. The NISQA model weights can be used to **predict the quality of a speech sample** that has been sent through a communication system (e.g telephone or video call). Besides overall speech quality, NISQA also provides predictions for the quality dimensions *Noisiness*, *Coloration*, *Discontinuity*, and *Loudness* to give more insight into the cause of the quality degradation. The NISQA-TTS model weights can be used to **estimate the *Naturalness* of synthetic speech** (e.g. from a Text-To-Speech system).
 
