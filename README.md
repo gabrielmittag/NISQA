@@ -63,7 +63,7 @@ There are three modes available to predict the quality of speech via command lin
 * Predict all files in a folder
 * Predict all files in a CSV table
 
-Select "*nisqa.tar*" to predict the quality of a transmitted speech sample and "*nisqa_tts.tar*" to predict the Naturalness of a synthesized speech sample.
+**Important:** Select "*nisqa.tar*" to predict the quality of a transmitted speech sample and "*nisqa_tts.tar*" to predict the Naturalness of a synthesized speech sample.
 
 To predict the quality of a single .wav file use:
 
