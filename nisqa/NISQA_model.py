@@ -854,7 +854,8 @@ class nisqaModel(object):
         dfile = pd.read_csv(csv_file_path)
 
         if not set(self.args['csv_db_train'] + self.args['csv_db_val']).issubset(dfile.db.unique().tolist()):
-            raise ValueError('Not all dbs found in csv')
+            missing_datasets = set(self.args['csv_db_train'] + self.args['csv_db_val']).difference(dfile.db.unique().tolist())
+            raise ValueError('Not all dbs found in csv:', missing_datasets)
         
         df_train = dfile[dfile.db.isin(self.args['csv_db_train'])].reset_index()
         df_val = dfile[dfile.db.isin(self.args['csv_db_val'])].reset_index()
