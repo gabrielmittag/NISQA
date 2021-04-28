@@ -1492,7 +1492,7 @@ def calc_eval_metrics(y, y_hat, y_hat_map=None, d=None, ci=None):
         'rmse_map': np.nan,
         'rmse_star_map': np.nan,
         }
-    if is_const(y_hat):
+    if is_const(y_hat) or any(np.isnan(y)):
         r['r_p'] = np.nan
     else:        
         r['r_p'] = pearsonr(y, y_hat)[0]
@@ -1766,7 +1766,6 @@ def eval_results(
                 df['y_hat_map'].loc[df.db==db_name] = df_db['y_hat_map'] 
                 
                 y_con_hat_map = df_db.groupby('con').mean().get('y_hat_map').to_numpy()
-                
                 r_con = calc_eval_metrics(y_con, y_con_hat, y_hat_map=y_con_hat_map, d=d, ci=ci_con)
                 
         r_con = {f'{k}_con': v for k, v in r_con.items()}
@@ -1908,7 +1907,7 @@ class biasLoss(object):
             y = y.reshape(-1)
             
             if not self.do_update:
-                r = pearsonr(y[y!=np.nan], y_hat[y!=np.nan])[0]
+                r = pearsonr(y[~np.isnan(y)], y_hat[~np.isnan(y)])[0]
                 
                 if self.do_print:
                     print('--> bias update: min_r {:0.2f}, r_p {:0.2f}'.format(r, self.min_r))
