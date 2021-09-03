@@ -50,11 +50,11 @@ We provide examples for using NISQA to predict the quality of speech samples, to
 
 There are three different model weights available, the appropriate weights should be loaded depending on the domain:
 
-| Model                 | Prediction Output                                           | Domain             | Filename           |
-| --------------------- | ----------------------------------------------------------- | ------------------ | ------------------ |
-| NISQA (v2.0)          | Overall Quality, Noisiness, Coloration, Noisiness, Loudness | Transmitted Speech | nisqa.tar          |
-| NISQA (v2.0) mos only | Overall Quality only (for finetuning/transfer learning)     | Transmitted Speech | nisqa_mos_only.tar |
-| NISQA-TTS (v1.0)      | Naturalness                                                 | Synthesized Speech | nisqa_tts.tar      |
+| Model                 | Prediction Output                                               | Domain             | Filename           |
+| --------------------- | --------------------------------------------------------------- | ------------------ | ------------------ |
+| NISQA (v2.0)          | Overall Quality, Noisiness, Coloration, Discontinuity, Loudness | Transmitted Speech | nisqa.tar          |
+| NISQA (v2.0) mos only | Overall Quality only (for finetuning/transfer learning)         | Transmitted Speech | nisqa_mos_only.tar |
+| NISQA-TTS (v1.0)      | Naturalness                                                     | Synthesized Speech | nisqa_tts.tar      |
 
 ### Prediction
 
