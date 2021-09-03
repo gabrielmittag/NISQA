@@ -1126,9 +1126,10 @@ class nisqaModel(object):
                 self.dev = torch.device("cuda")
         print('Device: {}'.format(self.dev))
         
-        if (self.dev==torch.device("cpu")) and self.args['tr_parallel']==True:
-            self.args['tr_parallel']==False 
-            print('Training on CPU -> tr_parallel set to False')
+        if "tr_parallel" in self.args:
+            if (self.dev==torch.device("cpu")) and self.args['tr_parallel']==True:
+                self.args['tr_parallel']==False 
+                print('Using CPU -> tr_parallel set to False')
 
     def _saveResults(self, model, model_args, opt, epoch, loss, ep_runtime, r, db_results, best):
         '''
