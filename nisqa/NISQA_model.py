@@ -1016,10 +1016,8 @@ class nisqaModel(object):
                 self.args['data_dir'] = args_new['data_dir']
                 self.args['input_dir'] = os.getcwd()
                 self.args['csv_deg'] = args_new['csv_deg']
-                if 'csv_ref' in args_new:
-                    self.args['csv_ref'] = args_new['csv_ref']     
-                else:
-                    self.args['csv_ref'] = None
+                self.args['csv_ref'] = args_new.get('csv_ref', None)
+
                 if 'csv_con' in args_new:
                     self.args['csv_con'] = args_new['csv_con']                
                 if args_new['bs']:
@@ -1030,7 +1028,7 @@ class nisqaModel(object):
             else:
                 raise NotImplementedError('Mode not available')                        
             
-        self.args['n_channel'] = args_new['n_channel']
+        self.args['n_channel'] = args_new.get('n_channel', 0)
 
         if self.args['model']=='NISQA_DIM':
             self.args['dim'] = True
