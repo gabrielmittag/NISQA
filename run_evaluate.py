@@ -24,6 +24,7 @@ if __name__ == "__main__":
             'csv_deg': 'filepath_deg',
             'num_workers': 6,
             'bs': 100,
+            'ms_channel': None,
             }
             
     nisqa = nisqaModel(args)
