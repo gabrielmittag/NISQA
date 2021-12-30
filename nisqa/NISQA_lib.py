@@ -1431,7 +1431,7 @@ def predict_mos(model, ds, bs, dev, num_workers=0):
     model.to(dev)
     model.eval()
     with torch.no_grad():
-        y_hat_list = [ [model(xb.to(dev), n_wins).cpu().numpy(), yb.cpu().numpy()] for xb, yb, (idx, n_wins) in dl]
+        y_hat_list = [ [model(xb.to(dev), n_wins.to(dev)).cpu().numpy(), yb.cpu().numpy()] for xb, yb, (idx, n_wins) in dl]
     yy = np.concatenate( y_hat_list, axis=1 )
     y_hat = yy[0,:,0].reshape(-1,1)
     y = yy[1,:,0].reshape(-1,1)
@@ -1452,7 +1452,7 @@ def predict_dim(model, ds, bs, dev, num_workers=0):
     model.to(dev)
     model.eval()
     with torch.no_grad():
-        y_hat_list = [ [model(xb.to(dev), n_wins).cpu().numpy(), yb.cpu().numpy()] for xb, yb, (idx, n_wins) in dl]
+        y_hat_list = [ [model(xb.to(dev), n_wins.to(dev)).cpu().numpy(), yb.cpu().numpy()] for xb, yb, (idx, n_wins) in dl]
     yy = np.concatenate( y_hat_list, axis=1 )
     
     y_hat = yy[0,:,:]
