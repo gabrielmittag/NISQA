@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils.data import DataLoader
-import nisqa.NISQA_lib as NL
+from . import NISQA_lib as NL
         
 class nisqaModel(object):
     '''
@@ -78,7 +78,8 @@ class nisqaModel(object):
                 index=False)
             
         print(self.ds_val.df.to_string(index=False))
-        
+        return self.ds_val.df
+
     def _train_mos(self):
         '''
         Trains speech quality model.
@@ -772,7 +773,8 @@ class nisqaModel(object):
             ms_fmax = self.args['ms_fmax'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
-            filename_column_ref = None,                        
+            filename_column_ref = None,
+            n_channel=self.args['n_channel'],
             )
         
         
@@ -802,8 +804,9 @@ class nisqaModel(object):
             ms_fmax = self.args['ms_fmax'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
-            filename_column_ref = None,                        
-            )
+            filename_column_ref = None,
+            n_channel=self.args['n_channel'],
+        )
                 
         
     def _loadDatasetsCSVpredict(self):         
@@ -841,8 +844,9 @@ class nisqaModel(object):
             ms_fmax = self.args['ms_fmax'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
-            filename_column_ref = self.args['csv_ref'],                        
-            )
+            filename_column_ref = self.args['csv_ref'],
+            n_channel=self.args['n_channel'],
+        )
 
         
     def _loadDatasetsCSV(self):    
@@ -893,8 +897,9 @@ class nisqaModel(object):
             ms_fmax = self.args['ms_fmax'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
-            filename_column_ref = self.args['csv_ref'],            
-            )
+            filename_column_ref = self.args['csv_ref'],
+            n_channel=self.args['n_channel'],
+        )
 
         self.ds_val = NL.SpeechQualityDataset(
             df_val,
@@ -917,6 +922,7 @@ class nisqaModel(object):
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
             filename_column_ref = self.args['csv_ref'],                        
+            n_channel = self.args['n_channel'],
             )
 
         self.runinfos['ds_train_len'] = len(self.ds_train)
@@ -1010,10 +1016,8 @@ class nisqaModel(object):
                 self.args['data_dir'] = args_new['data_dir']
                 self.args['input_dir'] = os.getcwd()
                 self.args['csv_deg'] = args_new['csv_deg']
-                if 'csv_ref' in args_new:
-                    self.args['csv_ref'] = args_new['csv_ref']     
-                else:
-                    self.args['csv_ref'] = None
+                self.args['csv_ref'] = args_new.get('csv_ref', None)
+
                 if 'csv_con' in args_new:
                     self.args['csv_con'] = args_new['csv_con']                
                 if args_new['bs']:
@@ -1024,6 +1028,8 @@ class nisqaModel(object):
             else:
                 raise NotImplementedError('Mode not available')                        
             
+        self.args['n_channel'] = args_new.get('n_channel', 0)
+
         if self.args['model']=='NISQA_DIM':
             self.args['dim'] = True
         else:
