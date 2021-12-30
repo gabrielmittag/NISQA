@@ -2215,20 +2215,20 @@ class SpeechQualityDataset(Dataset):
 
         # Get MOS (apply NaN in case of prediction only mode)
         if self.dim:
-            if self.mos_column is not None:
+            if self.mos_column=='predict_only':
+                y = np.full((5,1), np.nan).reshape(-1).astype('float32')
+            else:                
                 y_mos = self.df['mos'].iloc[index].reshape(-1).astype('float32') 
                 y_noi = self.df['noi'].iloc[index].reshape(-1).astype('float32')
                 y_dis = self.df['dis'].iloc[index].reshape(-1).astype('float32')         
                 y_col = self.df['col'].iloc[index].reshape(-1).astype('float32')                
                 y_loud = self.df['loud'].iloc[index].reshape(-1).astype('float32')                
                 y = np.concatenate((y_mos, y_noi, y_dis, y_col, y_loud), axis=0)
-            else:
-                y = np.full((5,1), np.nan).reshape(-1).astype('float32')
         else:
-            if self.mos_column is not None:
-                y = self.df[self.mos_column].iloc[index].reshape(-1).astype('float32')   
-            else:
+            if self.mos_column=='predict_only':
                 y = np.full(1, np.nan).reshape(-1).astype('float32') 
+            else:
+                y = self.df[self.mos_column].iloc[index].reshape(-1).astype('float32')   
 
         return x_spec_seg, y, (index, n_wins)
 

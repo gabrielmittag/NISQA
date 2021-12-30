@@ -755,7 +755,7 @@ class nisqaModel(object):
             df_con=None,
             data_dir = self.args['data_dir'],
             filename_column = 'deg',
-            mos_column = None,              
+            mos_column = 'predict_only',              
             seg_length = self.args['ms_seg_length'],
             max_length = self.args['ms_max_segments'],
             to_memory = None,
@@ -786,7 +786,7 @@ class nisqaModel(object):
             df_con=None,
             data_dir = data_dir,
             filename_column = 'deg',
-            mos_column = None,              
+            mos_column = 'predict_only',              
             seg_length = self.args['ms_seg_length'],
             max_length = self.args['ms_max_segments'],
             to_memory = None,
@@ -825,7 +825,7 @@ class nisqaModel(object):
             df_con=dcon,
             data_dir = self.args['data_dir'],
             filename_column = self.args['csv_deg'],
-            mos_column = None,              
+            mos_column = 'predict_only',              
             seg_length = self.args['ms_seg_length'],
             max_length = self.args['ms_max_segments'],
             to_memory = False,
@@ -929,106 +929,27 @@ class nisqaModel(object):
         '''   
         # if True overwrite input arguments from pretrained model
         if self.args['pretrained_model']:
-            if ':' in self.args['pretrained_model']:
+            if os.path.isabs(self.args['pretrained_model']):
                 model_path = os.path.join(self.args['pretrained_model'])
             else:
                 model_path = os.path.join(os.getcwd(), self.args['pretrained_model'])
             checkpoint = torch.load(model_path, map_location=self.dev)
             
             if self.args['mode']=='main':
-                args_new = self.args
+                checkpoint['args'].update(self.args)
+                self.args = checkpoint['args'] 
+            elif (self.args['mode']=='predict_csv') or (self.args['mode']=='predict_file') or (self.args['mode']=='predict_dir'):
+                self.args['tr_bs_val'] = self.args['bs']
+                self.args['tr_num_workers'] = self.args['num_workers']
+                checkpoint['args'].update(self.args)
                 self.args = checkpoint['args']
-                
-                self.args['mode'] = args_new['mode']
-                self.args['name'] = args_new['name']
-                self.args['data_dir'] = args_new['data_dir']
-                self.args['output_dir'] = args_new['output_dir']
-                self.args['csv_file'] = args_new['csv_file']
-                self.args['csv_con'] = args_new['csv_con']
-                self.args['csv_deg'] = args_new['csv_deg']
-                self.args['csv_db_train'] = args_new['csv_db_train']
-                self.args['csv_db_val'] = args_new['csv_db_val']            
-                self.args['pretrained_model'] = args_new['pretrained_model']
-                
-                if self.args['model']=='NISQA_DE':
-                    self.args['csv_ref'] = args_new['csv_ref']
-                else:
-                    self.args['csv_ref'] = None
-                    
-                if self.args['model']!='NISQA_DIM':
-                    self.args['csv_mos_train'] = args_new['csv_mos_train']
-                    self.args['csv_mos_val'] = args_new['csv_mos_val']
-                else:
-                    self.args['csv_mos_train'] = 'mos'
-                    self.args['csv_mos_val'] = 'mos'             
-                    
-                self.args['tr_epochs'] = args_new['tr_epochs']
-                self.args['tr_early_stop'] = args_new['tr_early_stop']
-                self.args['tr_bs'] = args_new['tr_bs']
-                self.args['tr_bs_val'] = args_new['tr_bs_val']
-                self.args['tr_lr'] = args_new['tr_lr']
-                self.args['tr_lr_patience'] = args_new['tr_lr_patience']
-                self.args['tr_num_workers'] = args_new['tr_num_workers']
-                self.args['tr_parallel'] = args_new['tr_parallel']
-                self.args['tr_checkpoint'] = args_new['tr_checkpoint']
-                self.args['tr_bias_anchor_db'] = args_new['tr_bias_anchor_db']
-                self.args['tr_bias_mapping'] = args_new['tr_bias_mapping']
-                self.args['tr_bias_min_r'] = args_new['tr_bias_min_r']
-                           
-                self.args['tr_verbose'] = args_new['tr_verbose']
-                
-                self.args['tr_ds_to_memory'] = args_new['tr_ds_to_memory']
-                self.args['tr_ds_to_memory_workers'] = args_new['tr_ds_to_memory_workers']
-                self.args['ms_max_segments'] = args_new['ms_max_segments']
-                self.args['ms_channel'] = args_new['ms_channel']
-
-            elif self.args['mode']=='predict_file':
-                args_new = self.args
-                self.args = checkpoint['args']
-                self.args['deg'] = args_new['deg']
-                self.args['mode'] = args_new['mode']
-                self.args['output_dir'] = args_new['output_dir']
-                self.args['pretrained_model'] = args_new['pretrained_model']
-                self.args['ms_channel'] = args_new['ms_channel']
-                
-            elif self.args['mode']=='predict_dir':
-                args_new = self.args
-                self.args = checkpoint['args']
-                self.args['data_dir'] = args_new['data_dir']
-                self.args['mode'] = args_new['mode']
-                self.args['output_dir'] = args_new['output_dir']
-                self.args['pretrained_model'] = args_new['pretrained_model']  
-                self.args['ms_channel'] = args_new['ms_channel']
-                if args_new['bs']:
-                    self.args['tr_bs_val'] = args_new['bs']
-                if args_new['num_workers']:
-                    self.args['tr_num_workers'] = args_new['num_workers'] 
-                    
-            elif self.args['mode']=='predict_csv':
-                args_new = self.args
-                self.args = checkpoint['args']
-                self.args['csv_file'] = args_new['csv_file']
-                self.args['mode'] = args_new['mode']
-                self.args['output_dir'] = args_new['output_dir']
-                self.args['pretrained_model'] = args_new['pretrained_model']  
-                self.args['ms_channel'] = args_new['ms_channel']
-                self.args['data_dir'] = args_new['data_dir']
-                self.args['csv_deg'] = args_new['csv_deg']
-                self.args['csv_ref'] = args_new.get('csv_ref', None)
-
-                if 'csv_con' in args_new:
-                    self.args['csv_con'] = args_new['csv_con']                
-                if args_new['bs']:
-                    self.args['tr_bs_val'] = args_new['bs']
-                if args_new['num_workers']:
-                    self.args['tr_num_workers'] = args_new['num_workers'] 
-                self.args['csv_mos_val'] = args_new.get('csv_mos_val', None)   
-
             else:
-                raise NotImplementedError('Mode not available')                        
+                raise NotImplementedError('Mode not available')
             
         if self.args['model']=='NISQA_DIM':
             self.args['dim'] = True
+            self.args['csv_mos_train'] = None # column names hardcoded for dim models
+            self.args['csv_mos_val'] = None  
         else:
             self.args['dim'] = False
             
