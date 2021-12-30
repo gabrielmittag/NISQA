@@ -478,12 +478,7 @@ class Framewise(nn.Module):
                 enforce_sorted=False
                 )     
         x = self.model(x_packed.data) 
-        x = PackedSequence(
-                x,
-                batch_sizes = x_packed.batch_sizes,
-                sorted_indices = x_packed.sorted_indices,
-                unsorted_indices = x_packed.unsorted_indices
-                )
+        x = x_packed._replace(data=x)                
         x, _ = pad_packed_sequence(
             x, 
             batch_first=True, 
@@ -1270,43 +1265,31 @@ class Alignment(torch.nn.Module):
         if self.att is not None:
             att_score, sim = self.att(query, y)     
             self._mask_attention(att_score, y, n_wins_y)
-            y = self.apply_att(y, att_score)        
+            att_score = F.softmax(att_score, dim=2)
+            y = self.apply_att(y, att_score) 
         return y        
 
 class AttDot(torch.nn.Module):
     '''
     AttDot: Dot attention that can be used by the Alignment module.
     '''       
-    def __init__(self, softmax=True):
+    def __init__(self):
         super().__init__()
-        self.softmax = softmax
-                
     def forward(self, query, y):
         att = torch.bmm(query, y.transpose(2,1))
         sim = att.max(2)[0].unsqueeze(1)
-        
-        if self.softmax:
-            att = F.softmax(att, dim=2)
-            
         return att, sim
     
 class AttCosine(torch.nn.Module):
     '''
     AttCosine: Cosine attention that can be used by the Alignment module.
     '''          
-    def __init__(self, softmax=True):
+    def __init__(self):
         super().__init__()
-        self.softmax = softmax
         self.pdist = nn.CosineSimilarity(dim=3)
-        
     def forward(self, query, y):
-        
         att = self.pdist(query.unsqueeze(2), y.unsqueeze(1))
         sim = att.max(2)[0].unsqueeze(1)
-        
-        if self.softmax:
-            att = F.softmax(att, dim=2)
-            
         return att, sim    
     
 class AttDistance(torch.nn.Module):
@@ -1322,7 +1305,6 @@ class AttDistance(torch.nn.Module):
         att = att.mean(dim=3).pow(self.weight_norm)
         att = - att.transpose(2,1)
         sim = att.max(2)[0].unsqueeze(1)
-        att = F.softmax(att, dim=2)
         return att, sim
     
 class AttBahdanau(torch.nn.Module):
@@ -1342,7 +1324,6 @@ class AttBahdanau(torch.nn.Module):
         att = torch.tanh( self.Wq(query).unsqueeze(1) + self.Wy(y).unsqueeze(2) )
         att = self.v(att).squeeze(3).transpose(2,1)
         sim = att.max(2)[0].unsqueeze(1)
-        att = F.softmax(att, dim=2 )
         return att, sim
 
 class AttLuong(torch.nn.Module):
@@ -1350,17 +1331,14 @@ class AttLuong(torch.nn.Module):
     AttLuong: Attention according to Luong that can be used by the 
     Alignment module.
     '''     
-    def __init__(self, q_dim, y_dim, softmax=True):
+    def __init__(self, q_dim, y_dim):
         super().__init__()
         self.q_dim = q_dim
         self.y_dim = y_dim
-        self.softmax = softmax
         self.W = nn.Linear(self.y_dim, self.q_dim)
     def forward(self, query, y):
         att = torch.bmm(query, self.W(y).transpose(2,1))
         sim = att.max(2)[0].unsqueeze(1)
-        if self.softmax:
-            att = F.softmax( att, dim=2 )
         return att, sim
 
 class ApplyHardAttention(torch.nn.Module):
