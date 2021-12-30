@@ -2,9 +2,9 @@
 
 # Runname and paths
 name: training_run_name # name of current training run
-data_dir: 'C:/Users/Name/Downloads/NISQA_Corpus' # main input dir with dataset samples and csv files
-output_dir: "C:/Users/Name/Downloads/trained_models" # output dir, a new subfolder for current run will be created with yaml, results csv, and stored model weights
-pretrained_model: 'weights/nisqa_mos_only.tar' # absolute path to pretrained model | path to pretrained model relative to current folder
+data_dir: C:/Users/Name/Downloads/NISQA_Corpus # main input dir with dataset samples and csv files
+output_dir: C:/Users/Name/Downloads/trained_models # output dir, a new subfolder for current run will be created with yaml, results csv, and stored model weights
+pretrained_model: weights/nisqa_mos_only.tar # absolute path to pretrained model | path to pretrained model relative to current folder
 
 # Dataset options
 csv_file: NISQA_corpus_file.csv # csv-file with MOS labels and filepaths of all datasets, must be placed in 'data_dir', must contain columns 'mos', 'noi', 'dis', 'col', 'loud' with overall and dimension quality ratings

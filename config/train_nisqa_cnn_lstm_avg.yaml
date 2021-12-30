@@ -2,8 +2,8 @@
 
 # Runname and paths
 name: training_run_name # name of current training run
-data_dir: 'C:/Users/Name/Downloads/NISQA_Corpus' # main input dir with dataset samples and csv files
-output_dir: "C:/Users/Name/Downloads/trained_models" # output dir, a new subfolder for current run will be created with yaml, results csv, and stored model weights
+data_dir: C:/Users/Name/Downloads/NISQA_Corpus # main input dir with dataset samples and csv files
+output_dir: C:/Users/Name/Downloads/trained_models # output dir, a new subfolder for current run will be created with yaml, results csv, and stored model weights
 pretrained_model: false
 
 # Dataset options
@@ -56,7 +56,7 @@ ms_channel: null # audio channel in case of stereo file (0->left, 1->right). if 
 model: NISQA # 'NISQA' single-ended | 'NISQA_DIM' single-ended with multidimension prediction | 'NISQA_DE' double-ended 
 
 # Framewise options (usually CNN)  
-cnn_model: 'standard' # framewise model, either 'adapt' for CNN with adaptive maxpooling | 'standard' for standard CNN | 'dff' for deep feed-forward network | 'skip' to skip framewise modelling
+cnn_model: standard # framewise model, either 'adapt' for CNN with adaptive maxpooling | 'standard' for standard CNN | 'dff' for deep feed-forward network | 'skip' to skip framewise modelling
 cnn_c_out_1: 16 # number of output channels of first convolutional layer
 cnn_c_out_2: 32 # number of output channels of the second convolutional layer
 cnn_c_out_3: 64 # number of output channels of the last four convolutional layer
@@ -68,7 +68,7 @@ cnn_pool_2: null # outpuf dimensions of second adaptive pooling ('adaptive' CNN 
 cnn_pool_3: null # outpuf dimensions of third adaptive pooling ('adaptive' CNN only)
 
 # Time-Depedency options 
-td: 'lstm' # time-depdency model, either 'self_att' for Transfomer based Self-Attention network (td_lstm_.. options will be ignored) | 'lstm' (td_sa_.. options will be ignored)
+td: lstm # time-depdency model, either 'self_att' for Transfomer based Self-Attention network (td_lstm_.. options will be ignored) | 'lstm' (td_sa_.. options will be ignored)
 td_sa_d_model: null # attention network dimension
 td_sa_nhead: null # number of heads
 td_sa_pos_enc: null # apply positional encoding (no improvement in previous experiments)
@@ -81,7 +81,7 @@ td_lstm_dropout: 0
 td_lstm_bidirectional: true  # use bidirectional LSTM -> hidden units x 2
 
 # Second Time-Depedency options (optional, for example for LSTM->Self-Attention network)
-td_2: 'skip' # time-depdency model, either 'self_att' for Transfomer based Self-Attention network (td_lstm_.. options will be ignored) | 'lstm' (td_sa_.. options will be ignored)
+td_2: skip # time-depdency model, either 'self_att' for Transfomer based Self-Attention network (td_lstm_.. options will be ignored) | 'lstm' (td_sa_.. options will be ignored)
 td_2_sa_d_model: null # attention network dimension
 td_2_sa_nhead: null # number of heads
 td_2_sa_pos_enc: null  # apply positional encoding (no improvement in previous experiments)
@@ -94,7 +94,7 @@ td_2_lstm_dropout: null
 td_2_lstm_bidirectional: null  # use bidirectional LSTM -> hidden units x 2
 
 # Pooling options
-pool: 'avg' # 'att' for Attention-Pooling | 'avg' for average-pooling | 'max' max-pooling | 'last_step' last-step pooling | 'last_step_bi' last-step pooling with BiLSTMs  
+pool: avg # 'att' for Attention-Pooling | 'avg' for average-pooling | 'max' max-pooling | 'last_step' last-step pooling | 'last_step_bi' last-step pooling with BiLSTMs  
 pool_att_h: null # number of hidden units of attention-pooling feedforward network
 pool_att_dropout: null # attention pooling dropout
 
