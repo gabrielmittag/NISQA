@@ -80,7 +80,7 @@ To predict the quality of all .wav files listed in a csv table use:
 python run_predict.py --mode predict_csv --pretrained_model weights/nisqa.tar --csv_file files.csv --csv_deg column_name_of_filepaths --num_workers 0 --bs 10 --output_dir /path/to/dir/with/results
 ```
 
-The results will be printed to the console and saved to a csv file in a given folder (optional with --output_dir). To speed up the prediction, the number of workers and batch size of the Pytorch Dataloader can be increased (optional with --num_workers and --bs). 
+The results will be printed to the console and saved to a csv file in a given folder (optional with --output_dir). To speed up the prediction, the number of workers and batch size of the Pytorch Dataloader can be increased (optional with --num_workers and --bs). In case of stereo files --ms_channel can be used to select the audio channel.
 
 ### Training
 
