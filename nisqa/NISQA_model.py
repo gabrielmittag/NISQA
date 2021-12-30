@@ -771,10 +771,10 @@ class nisqaModel(object):
             ms_n_mels = self.args['ms_n_mels'],
             ms_sr = self.args['ms_sr'],
             ms_fmax = self.args['ms_fmax'],
+            ms_channel=self.args['ms_channel'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
             filename_column_ref = None,
-            n_channel=self.args['n_channel'],
             )
         
         
@@ -802,10 +802,10 @@ class nisqaModel(object):
             ms_n_mels = self.args['ms_n_mels'],
             ms_sr = self.args['ms_sr'],
             ms_fmax = self.args['ms_fmax'],
+            ms_channel=self.args['ms_channel'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
             filename_column_ref = None,
-            n_channel=self.args['n_channel'],
         )
                 
         
@@ -842,10 +842,10 @@ class nisqaModel(object):
             ms_n_mels = self.args['ms_n_mels'],
             ms_sr = self.args['ms_sr'],
             ms_fmax = self.args['ms_fmax'],
+            ms_channel=self.args['ms_channel'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
             filename_column_ref = self.args['csv_ref'],
-            n_channel=self.args['n_channel'],
         )
 
         
@@ -895,10 +895,10 @@ class nisqaModel(object):
             ms_n_mels = self.args['ms_n_mels'],
             ms_sr = self.args['ms_sr'],
             ms_fmax = self.args['ms_fmax'],
+            ms_channel=self.args['ms_channel'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
             filename_column_ref = self.args['csv_ref'],
-            n_channel=self.args['n_channel'],
         )
 
         self.ds_val = NL.SpeechQualityDataset(
@@ -919,10 +919,10 @@ class nisqaModel(object):
             ms_n_mels = self.args['ms_n_mels'],
             ms_sr = self.args['ms_sr'],
             ms_fmax = self.args['ms_fmax'],
+            ms_channel = self.args['ms_channel'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
             filename_column_ref = self.args['csv_ref'],                        
-            n_channel = self.args['n_channel'],
             )
 
         self.runinfos['ds_train_len'] = len(self.ds_train)
@@ -985,7 +985,8 @@ class nisqaModel(object):
                 self.args['tr_ds_to_memory'] = args_new['tr_ds_to_memory']
                 self.args['tr_ds_to_memory_workers'] = args_new['tr_ds_to_memory_workers']
                 self.args['ms_max_segments'] = args_new['ms_max_segments']
-                
+                self.args['ms_channel'] = args_new['ms_channel']
+
             elif self.args['mode']=='predict_file':
                 args_new = self.args
                 self.args = checkpoint['args']
@@ -993,6 +994,7 @@ class nisqaModel(object):
                 self.args['mode'] = args_new['mode']
                 self.args['output_dir'] = args_new['output_dir']
                 self.args['pretrained_model'] = args_new['pretrained_model']
+                self.args['ms_channel'] = args_new['ms_channel']
                 
             elif self.args['mode']=='predict_dir':
                 args_new = self.args
@@ -1000,7 +1002,8 @@ class nisqaModel(object):
                 self.args['data_dir'] = args_new['data_dir']
                 self.args['mode'] = args_new['mode']
                 self.args['output_dir'] = args_new['output_dir']
-                self.args['pretrained_model'] = args_new['pretrained_model']   
+                self.args['pretrained_model'] = args_new['pretrained_model']  
+                self.args['ms_channel'] = args_new['ms_channel']
                 if args_new['bs']:
                     self.args['tr_bs_val'] = args_new['bs']
                 if args_new['num_workers']:
@@ -1013,6 +1016,7 @@ class nisqaModel(object):
                 self.args['mode'] = args_new['mode']
                 self.args['output_dir'] = args_new['output_dir']
                 self.args['pretrained_model'] = args_new['pretrained_model']  
+                self.args['ms_channel'] = args_new['ms_channel']
                 self.args['data_dir'] = args_new['data_dir']
                 self.args['input_dir'] = os.getcwd()
                 self.args['csv_deg'] = args_new['csv_deg']
@@ -1028,8 +1032,6 @@ class nisqaModel(object):
             else:
                 raise NotImplementedError('Mode not available')                        
             
-        self.args['n_channel'] = args_new.get('n_channel', 0)
-
         if self.args['model']=='NISQA_DIM':
             self.args['dim'] = True
         else:

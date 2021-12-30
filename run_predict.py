@@ -15,6 +15,7 @@ parser.add_argument('--csv_file', type=str, help='file name of csv (must be in c
 parser.add_argument('--csv_deg', type=str, help='column in csv with files name/path')
 parser.add_argument('--num_workers', type=int, help='number of workers for pytorchs dataloader')
 parser.add_argument('--bs', type=int, help='batch size for predicting')
+parser.add_argument('--ms_channel', type=int, help='audio channel in case of stereo file')
 
 args = parser.parse_args()
 args = vars(args)

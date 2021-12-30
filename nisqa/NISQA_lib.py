@@ -2080,10 +2080,10 @@ class SpeechQualityDataset(Dataset):
         ms_n_mels=32,
         ms_sr=48e3,
         ms_fmax=16e3,
+        ms_channel=None,
         double_ended=False,
         filename_column_ref=None,
         dim=False,
-        n_channel=0
         ):
 
         self.df = df
@@ -2104,9 +2104,9 @@ class SpeechQualityDataset(Dataset):
         self.ms_n_mels = ms_n_mels
         self.ms_sr = ms_sr
         self.ms_fmax = ms_fmax
+        self.ms_channel = ms_channel
         self.double_ended = double_ended
         self.dim = dim
-        self.n_channel = n_channel
 
         # if True load all specs to memory
         self.to_memory = False
@@ -2149,7 +2149,7 @@ class SpeechQualityDataset(Dataset):
                 win_length=self.ms_win_length,
                 n_mels=self.ms_n_mels,
                 fmax=self.ms_fmax,
-                n_channel=self.n_channel
+                ms_channel=self.ms_channel
                 )   
             
             if self.double_ended:
@@ -2291,16 +2291,19 @@ def get_librosa_melspec(
     win_length=170,
     n_mels=32,
     fmax=16e3,
-    n_channel=0
+    ms_channel=None,
     ):
     '''
     Calculate mel-spectrograms with Librosa.
     '''    
     # Calc spec
     try:
-        y, sr = lb.load(file_path, sr=sr, mono=False)
-        if len(y.shape) > 1:
-            y = y[n_channel, :]
+        if ms_channel is not None:
+            y, sr = lb.load(file_path, sr=sr, mono=False)
+            if len(y.shape)>1:
+                y = y[ms_channel, :]
+        else:
+            y, sr = lb.load(file_path, sr=sr)
     except:
         raise ValueError('Could not load file {}'.format(file_path))
     

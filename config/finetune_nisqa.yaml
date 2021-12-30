@@ -34,6 +34,7 @@ tr_device: null # train on 'cpu' or 'cuda', if null 'cuda' is used if available.
 tr_checkpoint: every_epoch # 'every_epoch' stores model weights at each training epoch | 'best_only' stores only the weights with best validation correlation | 'null' only stores results but no model weights
 tr_verbose: 2 # '0' only basic results after each epoch | '1' more detailed results and bias loss information | '2' adds progression bar
 ms_max_segments: 1300 # if samples of different duration are used they will be padded. one segment corresponds to 40ms -> 0.04*1300=52sec max sample duration. increase if you apply the model to longer samples
+ms_channel: null # audio channel in case of stereo file (0->left, 1->right). if null, mono mix is used
 
 # Bias loss options (optional)
 tr_bias_mapping: null # set to 'first_order' if bias loss should be applied, otherwise 'null'
