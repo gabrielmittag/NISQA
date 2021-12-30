@@ -488,7 +488,7 @@ class Framewise(nn.Module):
         (bs, length, channels, height, width) = x.shape
         x_packed = pack_padded_sequence(
                 x,
-                n_wins,
+                n_wins.cpu(),
                 batch_first=True,
                 enforce_sorted=False
                 )     
@@ -926,7 +926,7 @@ class LSTM(nn.Module):
         
         x = pack_padded_sequence(
                 x,
-                n_wins,
+                n_wins.cpu(),
                 batch_first=True,
                 enforce_sorted=False
                 )             

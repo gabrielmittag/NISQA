@@ -140,7 +140,6 @@ class nisqaModel(object):
                 # Estimate batch ---------------------------------------------------
                 xb_spec = xb_spec.to(self.dev)
                 yb_mos = yb_mos.to(self.dev)
-                n_wins = n_wins.to(self.dev)
 
                 # Forward pass ----------------------------------------------------
                 yb_mos_hat = self.model(xb_spec, n_wins)
@@ -331,7 +330,6 @@ class nisqaModel(object):
                 # Estimate batch ---------------------------------------------------
                 xb_spec = xb_spec.to(self.dev)
                 yb_mos = yb_mos.to(self.dev)
-                n_wins = n_wins.to(self.dev)
                 
                 # Forward pass ----------------------------------------------------
                 yb_mos_hat = self.model(xb_spec, n_wins)
