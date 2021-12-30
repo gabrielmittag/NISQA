@@ -22,8 +22,9 @@ if __name__ == "__main__":
             'csv_file': 'NISQA_corpus_file.csv',
             'csv_con': 'NISQA_corpus_con.csv',
             'csv_deg': 'filepath_deg',
+            'csv_mos_val': 'mos',
             'num_workers': 6,
-            'bs': 100,
+            'bs': 40,
             'ms_channel': None,
             }
             

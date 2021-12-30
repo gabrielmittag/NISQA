@@ -743,8 +743,7 @@ class nisqaModel(object):
             
     
     def _loadDatasetsFolder(self):
-        data_dir = self.args['data_dir']
-        files = glob( os.path.join(data_dir, '*.wav') )
+        files = glob( os.path.join(self.args['data_dir'], '*.wav') )
         files = [os.path.basename(files) for files in files]
         df_val = pd.DataFrame(files, columns=['deg'])
      
@@ -756,13 +755,13 @@ class nisqaModel(object):
         self.ds_val = NL.SpeechQualityDataset(
             df_val,
             df_con=None,
-            data_dir = data_dir,
-            filename_column='deg',
-            mos_column=None,              
+            data_dir = self.args['data_dir'],
+            filename_column = 'deg',
+            mos_column = None,              
             seg_length = self.args['ms_seg_length'],
             max_length = self.args['ms_max_segments'],
-            to_memory = self.args['tr_ds_to_memory'],
-            to_memory_workers = self.args['tr_ds_to_memory_workers'],
+            to_memory = None,
+            to_memory_workers = None,
             seg_hop_length = self.args['ms_seg_hop_length'],
             transform = None,
             ms_n_fft = self.args['ms_n_fft'],
@@ -771,7 +770,7 @@ class nisqaModel(object):
             ms_n_mels = self.args['ms_n_mels'],
             ms_sr = self.args['ms_sr'],
             ms_fmax = self.args['ms_fmax'],
-            ms_channel=self.args['ms_channel'],
+            ms_channel = self.args['ms_channel'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
             filename_column_ref = None,
@@ -788,12 +787,12 @@ class nisqaModel(object):
             df_val,
             df_con=None,
             data_dir = data_dir,
-            filename_column='deg',
-            mos_column=None,              
+            filename_column = 'deg',
+            mos_column = None,              
             seg_length = self.args['ms_seg_length'],
             max_length = self.args['ms_max_segments'],
-            to_memory = self.args['tr_ds_to_memory'],
-            to_memory_workers = self.args['tr_ds_to_memory_workers'],
+            to_memory = None,
+            to_memory_workers = None,
             seg_hop_length = self.args['ms_seg_hop_length'],
             transform = None,
             ms_n_fft = self.args['ms_n_fft'],
@@ -802,7 +801,7 @@ class nisqaModel(object):
             ms_n_mels = self.args['ms_n_mels'],
             ms_sr = self.args['ms_sr'],
             ms_fmax = self.args['ms_fmax'],
-            ms_channel=self.args['ms_channel'],
+            ms_channel = self.args['ms_channel'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
             filename_column_ref = None,
@@ -813,7 +812,6 @@ class nisqaModel(object):
         '''
         Loads validation dataset for prediction only.
         '''            
-        data_dir = self.args['data_dir']
         csv_file_path = os.path.join(self.args['data_dir'], self.args['csv_file'])
         dfile = pd.read_csv(csv_file_path)
         if 'csv_con' in self.args:
@@ -827,9 +825,9 @@ class nisqaModel(object):
         self.ds_val = NL.SpeechQualityDataset(
             dfile,
             df_con=dcon,
-            data_dir = data_dir,
-            filename_column=self.args['csv_deg'],
-            mos_column=None,              
+            data_dir = self.args['data_dir'],
+            filename_column = self.args['csv_deg'],
+            mos_column = None,              
             seg_length = self.args['ms_seg_length'],
             max_length = self.args['ms_max_segments'],
             to_memory = False,
@@ -842,7 +840,7 @@ class nisqaModel(object):
             ms_n_mels = self.args['ms_n_mels'],
             ms_sr = self.args['ms_sr'],
             ms_fmax = self.args['ms_fmax'],
-            ms_channel=self.args['ms_channel'],
+            ms_channel = self.args['ms_channel'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
             filename_column_ref = self.args['csv_ref'],
@@ -853,8 +851,7 @@ class nisqaModel(object):
         '''
         Loads training and validation dataset for training.
         '''          
-        data_dir = self.args['input_dir']
-        csv_file_path = os.path.join(self.args['input_dir'], self.args['csv_file'])
+        csv_file_path = os.path.join(self.args['data_dir'], self.args['csv_file'])
         dfile = pd.read_csv(csv_file_path)
 
         if not set(self.args['csv_db_train'] + self.args['csv_db_val']).issubset(dfile.db.unique().tolist()):
@@ -865,7 +862,7 @@ class nisqaModel(object):
         df_val = dfile[dfile.db.isin(self.args['csv_db_val'])].reset_index()
         
         if self.args['csv_con'] is not None:
-            csv_con_path = os.path.join(self.args['input_dir'], self.args['csv_con'])
+            csv_con_path = os.path.join(self.args['data_dir'], self.args['csv_con'])
             dcon = pd.read_csv(csv_con_path)
             dcon_train = dcon[dcon.db.isin(self.args['csv_db_train'])].reset_index()
             dcon_val = dcon[dcon.db.isin(self.args['csv_db_val'])].reset_index()        
@@ -880,9 +877,9 @@ class nisqaModel(object):
         self.ds_train = NL.SpeechQualityDataset(
             df_train,
             df_con=dcon_train,
-            data_dir = data_dir,
-            filename_column=self.args['csv_deg'],
-            mos_column=self.args['csv_mos_train'],            
+            data_dir = self.args['data_dir'],
+            filename_column = self.args['csv_deg'],
+            mos_column = self.args['csv_mos_train'],            
             seg_length = self.args['ms_seg_length'],
             max_length = self.args['ms_max_segments'],
             to_memory = self.args['tr_ds_to_memory'],
@@ -895,7 +892,7 @@ class nisqaModel(object):
             ms_n_mels = self.args['ms_n_mels'],
             ms_sr = self.args['ms_sr'],
             ms_fmax = self.args['ms_fmax'],
-            ms_channel=self.args['ms_channel'],
+            ms_channel = self.args['ms_channel'],
             double_ended = self.args['double_ended'],
             dim = self.args['dim'],
             filename_column_ref = self.args['csv_ref'],
@@ -904,9 +901,9 @@ class nisqaModel(object):
         self.ds_val = NL.SpeechQualityDataset(
             df_val,
             df_con=dcon_val,
-            data_dir = data_dir,
-            filename_column=self.args['csv_deg'],
-            mos_column=self.args['csv_mos_val'],              
+            data_dir = self.args['data_dir'],
+            filename_column = self.args['csv_deg'],
+            mos_column = self.args['csv_mos_val'],              
             seg_length = self.args['ms_seg_length'],
             max_length = self.args['ms_max_segments'],
             to_memory = self.args['tr_ds_to_memory'],
@@ -946,7 +943,7 @@ class nisqaModel(object):
                 
                 self.args['mode'] = args_new['mode']
                 self.args['name'] = args_new['name']
-                self.args['input_dir'] = args_new['input_dir']
+                self.args['data_dir'] = args_new['data_dir']
                 self.args['output_dir'] = args_new['output_dir']
                 self.args['csv_file'] = args_new['csv_file']
                 self.args['csv_con'] = args_new['csv_con']
@@ -964,8 +961,8 @@ class nisqaModel(object):
                     self.args['csv_mos_train'] = args_new['csv_mos_train']
                     self.args['csv_mos_val'] = args_new['csv_mos_val']
                 else:
-                    self.args['csv_mos_train'] = None
-                    self.args['csv_mos_val'] = None             
+                    self.args['csv_mos_train'] = 'mos'
+                    self.args['csv_mos_val'] = 'mos'             
                     
                 self.args['tr_epochs'] = args_new['tr_epochs']
                 self.args['tr_early_stop'] = args_new['tr_early_stop']
@@ -1018,7 +1015,6 @@ class nisqaModel(object):
                 self.args['pretrained_model'] = args_new['pretrained_model']  
                 self.args['ms_channel'] = args_new['ms_channel']
                 self.args['data_dir'] = args_new['data_dir']
-                self.args['input_dir'] = os.getcwd()
                 self.args['csv_deg'] = args_new['csv_deg']
                 self.args['csv_ref'] = args_new.get('csv_ref', None)
 
@@ -1028,7 +1024,8 @@ class nisqaModel(object):
                     self.args['tr_bs_val'] = args_new['bs']
                 if args_new['num_workers']:
                     self.args['tr_num_workers'] = args_new['num_workers'] 
-                    
+                self.args['csv_mos_val'] = args_new.get('csv_mos_val', None)   
+
             else:
                 raise NotImplementedError('Mode not available')                        
             

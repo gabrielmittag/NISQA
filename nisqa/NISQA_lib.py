@@ -21,7 +21,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence
 from torch.nn.utils.rnn import pack_padded_sequence
-from torch.nn.utils.rnn import PackedSequence
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
@@ -2214,17 +2213,23 @@ class SpeechQualityDataset(Dataset):
             x_spec_seg = torch.cat((x_spec_seg, x_spec_seg_ref), dim=1)
             n_wins = np.concatenate((n_wins.reshape(1), n_wins_ref.reshape(1)), axis=0)            
 
-        # Get MOS
+        # Get MOS (apply NaN in case of prediction only mode)
         if self.dim:
-            y_mos = self.df['mos'].iloc[index].reshape(-1).astype('float32') 
-            y_noi = self.df['noi'].iloc[index].reshape(-1).astype('float32')
-            y_dis = self.df['dis'].iloc[index].reshape(-1).astype('float32')         
-            y_col = self.df['col'].iloc[index].reshape(-1).astype('float32')                
-            y_loud = self.df['loud'].iloc[index].reshape(-1).astype('float32')                
-            y = np.concatenate((y_mos, y_noi, y_dis, y_col, y_loud), axis=0)
+            if self.mos_column is not None:
+                y_mos = self.df['mos'].iloc[index].reshape(-1).astype('float32') 
+                y_noi = self.df['noi'].iloc[index].reshape(-1).astype('float32')
+                y_dis = self.df['dis'].iloc[index].reshape(-1).astype('float32')         
+                y_col = self.df['col'].iloc[index].reshape(-1).astype('float32')                
+                y_loud = self.df['loud'].iloc[index].reshape(-1).astype('float32')                
+                y = np.concatenate((y_mos, y_noi, y_dis, y_col, y_loud), axis=0)
+            else:
+                y = np.full((5,1), np.nan).reshape(-1).astype('float32')
         else:
-            y = self.df[self.mos_column].iloc[index].reshape(-1).astype('float32')   
-        
+            if self.mos_column is not None:
+                y = self.df[self.mos_column].iloc[index].reshape(-1).astype('float32')   
+            else:
+                y = np.full(1, np.nan).reshape(-1).astype('float32') 
+
         return x_spec_seg, y, (index, n_wins)
 
     def __len__(self):

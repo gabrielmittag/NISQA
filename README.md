@@ -92,19 +92,19 @@ To use the model weights to finetune the model on a new dataset, only a CSV file
 python run_train.py --yaml config/finetune_nisqa.yaml
 ```
 
-- If you use the [NISQA Corpus](https://github.com/gabrielmittag/NISQA/wiki/NISQA-Corpus), you only need to update two arguments in the YAML file and you are ready to go: The `input_dir` to the extracted NISQA_Corpus folder and the `output_dir`, where the results should be stored.
+- If the [NISQA Corpus](https://github.com/gabrielmittag/NISQA/wiki/NISQA-Corpus) is used, only two arguments need to updated in the YAML file and you are ready to go: The `data_dir` to the extracted NISQA_Corpus folder and the `output_dir`, where the results should be stored.
 
 - If you use your own dataset or want to load the NISQA-TTS model, some other updates are needed. 
 
   Your CSV file needs to contain at least three columns with the following names
 
   - `db` with the individual dataset names for each file
-  - `filepath_deg` filepath to the degraded WAV file, either absolute paths or relative to the `input_dir` (CSV column name can be changed in YAML)
+  - `filepath_deg` filepath to the degraded WAV file, either absolute paths or relative to the `data_dir` (CSV column name can be changed in YAML)
   - `mos` with the target labels (CSV column name can be changed in YAML)
 
   The `finetune_nisqa.yaml` needs to be updated as follows:
 
-  - `input_dir` path to the main folder, which contains the CSV file and the datasets
+  - `data_dir` path to the main folder, which contains the CSV file and the datasets
   - `output_dir` path to output folder with saved model weights and results
   - `pretrained_model` filename of the pretrained model, either `nisqa_mos_only.tar` for natural speech or `nisqa_tts.tar` for synthesized speech
   - `csv_file` name of the CSV with filepaths and target labels
@@ -128,7 +128,7 @@ The framewise and time-dependency models can be skipped, for example to train an
 python run_train.py --yaml config/train_nisqa_cnn_sa_ap.yaml
 ```
 
-If you use the [NISQA Corpus](https://github.com/gabrielmittag/NISQA/wiki/NISQA-Corpus), you only need to update the `input_dir` to the extracted NISQA_Corpus folder and the `output_dir` in the YAML file. Otherwise, see the previous [finetuning section](#finetuning-transfer-learning) for updating the YAML file if you use your own dataset.
+If the [NISQA Corpus](https://github.com/gabrielmittag/NISQA/wiki/NISQA-Corpus) is used, only the `data_dir` needs to be updated to the unzipped NISQA_Corpus folder and the `output_dir` in the YAML file. Otherwise, see the previous [finetuning section](#finetuning-transfer-learning) for updating the YAML file if a custom dataset is applied.
 
 It is also possible to train any other combination of neural networks, for example, to train a model with LSTM instead of Self-Attention, the `train_nisqa_cnn_lstm_avg.yaml` example configuration file is provided. 
 
