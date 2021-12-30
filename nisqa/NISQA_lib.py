@@ -229,7 +229,22 @@ class NISQA_DIM(nn.Module):
             lstm_dropout=td_lstm_dropout,
             lstm_bidirectional=td_lstm_bidirectional
             )
-        
+
+        self.time_dependency_2 = TimeDependency(
+            input_size=self.time_dependency.fan_out,
+            td=td_2,
+            sa_d_model=td_2_sa_d_model,
+            sa_nhead=td_2_sa_nhead,
+            sa_pos_enc=td_2_sa_pos_enc,
+            sa_num_layers=td_2_sa_num_layers,
+            sa_h=td_2_sa_h,
+            sa_dropout=td_2_sa_dropout,
+            lstm_h=td_2_lstm_h,
+            lstm_num_layers=td_2_lstm_num_layers,
+            lstm_dropout=td_2_lstm_dropout,
+            lstm_bidirectional=td_2_lstm_bidirectional
+            )     
+
         pool = Pooling(
             self.time_dependency.fan_out,
             output_size=1,
@@ -247,6 +262,7 @@ class NISQA_DIM(nn.Module):
         
         x = self.cnn(x, n_wins)
         x, n_wins = self.time_dependency(x, n_wins)
+        x, n_wins = self.time_dependency_2(x, n_wins)
         out = [mod(x, n_wins) for mod in self.pool_layers]
         out = torch.cat(out, dim=1)
 
