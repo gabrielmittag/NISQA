@@ -35,6 +35,8 @@ elif args['mode'] == 'predict_csv':
         args['data_dir'] = ''
 else:
         raise NotImplementedError('--mode given not available')
+args['tr_bs_val'] = args['bs']
+args['tr_num_workers'] = args['num_workers']
     
 if __name__ == "__main__":
     nisqa = nisqaModel(args)

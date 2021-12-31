@@ -937,12 +937,7 @@ class nisqaModel(object):
                 model_path = os.path.join(os.getcwd(), self.args['pretrained_model'])
             checkpoint = torch.load(model_path, map_location=self.dev)
             
-            if self.args['mode']=='main':
-                checkpoint['args'].update(self.args)
-                self.args = checkpoint['args'] 
-            elif (self.args['mode']=='predict_csv') or (self.args['mode']=='predict_file') or (self.args['mode']=='predict_dir'):
-                self.args['tr_bs_val'] = self.args['bs']
-                self.args['tr_num_workers'] = self.args['num_workers']
+            if (self.args['mode']=='main') or (self.args['mode']=='predict_csv') or (self.args['mode']=='predict_file') or (self.args['mode']=='predict_dir'):
                 checkpoint['args'].update(self.args)
                 self.args = checkpoint['args']
             else:
