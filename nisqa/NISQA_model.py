@@ -937,11 +937,9 @@ class nisqaModel(object):
                 model_path = os.path.join(os.getcwd(), self.args['pretrained_model'])
             checkpoint = torch.load(model_path, map_location=self.dev)
             
-            if (self.args['mode']=='main') or (self.args['mode']=='predict_csv') or (self.args['mode']=='predict_file') or (self.args['mode']=='predict_dir'):
-                checkpoint['args'].update(self.args)
-                self.args = checkpoint['args']
-            else:
-                raise NotImplementedError('Mode not available')
+            # update checkpoint arguments with new arguments
+            checkpoint['args'].update(self.args)
+            self.args = checkpoint['args']
             
         if self.args['model']=='NISQA_DIM':
             self.args['dim'] = True
