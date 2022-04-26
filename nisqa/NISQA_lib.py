@@ -486,19 +486,9 @@ class Framewise(nn.Module):
         
     def forward(self, x, n_wins):
         (bs, length, channels, height, width) = x.shape
-        x_packed = pack_padded_sequence(
-                x,
-                n_wins.cpu(),
-                batch_first=True,
-                enforce_sorted=False
-                )     
-        x = self.model(x_packed.data) 
-        x = x_packed._replace(data=x)                
-        x, _ = pad_packed_sequence(
-            x, 
-            batch_first=True, 
-            padding_value=0.0,
-            total_length=n_wins.max())
+        x = x.view(bs*length, channels, height, width )
+        x = self.model(x) 
+        x = x.view(bs, length, -1)
         return x    
 
 class SkipCNN(nn.Module):
@@ -923,23 +913,8 @@ class LSTM(nn.Module):
         self.fan_out = num_directions*lstm_h
 
     def forward(self, x, n_wins):
-        
-        x = pack_padded_sequence(
-                x,
-                n_wins.cpu(),
-                batch_first=True,
-                enforce_sorted=False
-                )             
-        
         self.lstm.flatten_parameters()
-        x = self.lstm(x)[0]
-        
-        x, _ = pad_packed_sequence(
-            x, 
-            batch_first=True, 
-            padding_value=0.0,
-            total_length=n_wins.max())          
-  
+        x = self.lstm(x)[0]      
         return x, n_wins
 
 class SelfAttention(nn.Module):
