@@ -30,6 +30,8 @@ More information about the deep learning model structure, the used training data
 
 ## Installation
 
+### Windows
+
 To install requirements install [Anaconda](https://www.anaconda.com/products/individual) and then use:
 
 ```setup
@@ -41,8 +43,57 @@ This will create a new environment with the name "nisqa". Activate this environm
 ```setup2
 conda activate nisqa
 ```
+### macOS
 
+#### • Installing miniconda
+To install requirements you can use [Anaconda](https://www.anaconda.com/products/individual) however it is recommended to use [miniconda](https://docs.conda.io/en/latest/miniconda.html). The second command is going to setup your shell (zsh in this case).
 
+```miniconda
+brew install --cask miniconda
+
+conda init zsh
+```
+#### • Creating the environment
+Create an arm64 conda environment using the .yml file for macOS.
+```setup
+conda env create -f env-macos.yml
+```
+Note that if your conda is M1 native and you want to install an intel environment, you need to run the command with the following prefix and use the x86 env file:
+```setup
+CONDA_SUBDIR=osx-64 conda env create -f env-macos-x86.yml
+```
+#### • Activating the environment
+This will create a new environment with the name "nisqa" (or "nisqa-x86" if you opted for an x86 version). Activate this environment to go on:
+```setup2
+conda activate nisqa
+```
+
+#### • Deactivate and remove the environment
+```uninstall
+conda deactivate
+
+conda remove --name nisqa --all
+```
+### Linux
+
+Install [Anaconda](https://www.anaconda.com/products/individual) / [miniconda](https://docs.conda.io/en/latest/miniconda.html).
+
+Note: If you do not choose the installer to initialze Anaconda3, you can activate conda's base environment in your current shell session with:
+```shell
+eval "$(<installation_folder>/bin/conda shell.YOUR_SHELL_NAME hook)"
+```
+
+#### Create conda environment
+
+```setup
+conda env create -f env.yml
+```
+
+This will create a new environment with the name "nisqa". Activate this environment to go on:
+
+```setup2
+conda activate nisqa
+```
 
 ## Using NISQA
 
@@ -155,7 +206,7 @@ For the download link and more details on the datasets and used source speech sa
 - If you use the **NISQA model** or the **NISQA Corpus** for your research, please cite following paper:  
   [G. Mittag, B. Naderi, A. Chehadi, and S. Möller “NISQA: A Deep CNN-Self-Attention Model for Multidimensional Speech Quality Prediction with Crowdsourced Datasets,” in Proc. Interspeech 2021, 2021.](https://www.isca-speech.org/archive/pdfs/interspeech_2021/mittag21_interspeech.pdf)
 - Please cite following paper if you use the **NISQA-TTS** model for Naturalness prediction of synthesized speech:  
-  [G. Mittag and S. Moller, “Deep Learning Based Assessment of Synthetic Speech Naturalness,” in Proc. Interspeech 2020, 2020.](https://www.isca-speech.org/archive/Interspeech_2020/abstracts/2382.html)
+  [G. Mittag and S. Moller, “Deep Learning Based Assessment of Synthetic Speech Naturalness,” in Proc. Interspeech 2020, 2020.](https://arxiv.org/pdf/2104.11673.pdf)
 - Please cite following paper if you use the **double-ended NISQA model**:  
   [G. Mittag and S. Möller. Full-reference speech quality estimation with attentional Siamese neural networks. In Proc. ICASSP 2020, 2020.](https://ieeexplore.ieee.org/document/9053951)
 - The older NISQA (v0.42) model version is described in following paper:  
