@@ -74,7 +74,7 @@ class nisqaModel(object):
         if self.args['output_dir']:
             self.ds_val.df['model'] = self.args['name']
             output_file_name = 'NISQA_results.csv'
-            if self.args['output_file_name']:
+            if output_file_name in self.args:
                 output_file_name  = self.args['output_file_name']                
             self.ds_val.df.to_csv(
                 os.path.join(self.args['output_dir'], output_file_name), 
