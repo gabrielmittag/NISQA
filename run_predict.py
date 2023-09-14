@@ -16,6 +16,17 @@ parser.add_argument('--csv_deg', type=str, help='column in csv with files name/p
 parser.add_argument('--num_workers', type=int, default=0, help='number of workers for pytorchs dataloader')
 parser.add_argument('--bs', type=int, default=1, help='batch size for predicting')
 parser.add_argument('--ms_channel', type=int, help='audio channel in case of stereo file')
+### Add 
+# 1) the name of result csv,
+# 2) statistics(mean and standard deviation),
+# 3) type of visualizations
+# 4) whether to save the plot
+### to the parameters
+parser.add_argument('--output_name', type=str, help='name of the csv result file')
+parser.add_argument('--compute_stats', action='store_true', help='whether to calculate the mean and the standard deviation of the results')
+parser.add_argument('--plot_type', type=str, default='None', help='Visualization of the results. Either barchart, linechart or None')
+parser.add_argument('--plot_name', type=str, default='None', help='name of the plot file if saving plot is needed')
+###
 
 args = parser.parse_args()
 args = vars(args)
@@ -35,6 +46,12 @@ elif args['mode'] == 'predict_csv':
         args['data_dir'] = ''
 else:
         raise NotImplementedError('--mode given not available')
+
+# `plot_name` can only be set when `plot_type` is not `None``
+if 'plot_name' in args and args['plot_name'] != 'None':
+    if 'plot_type' in args and args['plot_type'] == 'None':
+        raise ValueError('--plot_name argument can only be set when `plot_type` is either `barchart` or `linechart`')
+
 args['tr_bs_val'] = args['bs']
 args['tr_num_workers'] = args['num_workers']
     
