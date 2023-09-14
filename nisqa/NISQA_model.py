@@ -149,7 +149,7 @@ class nisqaModel(object):
         if self.args['output_dir']:
             self.ds_val.df['model'] = self.args['name']
             csv_name = 'NISQA_results.csv'
-            if 'output_name' in self.args:
+            if 'output_name' in self.args and self.args['output_name']:
                 csv_name = str(self.args['output_name']) + '.csv'
             # whether print mean and standard deviation or not 
             if 'compute_stats' in self.args and self.args['compute_stats']:
