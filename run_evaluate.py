@@ -26,6 +26,7 @@ if __name__ == "__main__":
             'tr_num_workers': 6,
             'tr_bs_val': 40,
             'ms_channel': None,
+            'compile': True,
             }
             
     nisqa = nisqaModel(args)

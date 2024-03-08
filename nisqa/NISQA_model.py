@@ -28,6 +28,8 @@ class nisqaModel(object):
         
         if 'mode' not in self.args:
             self.args['mode'] = 'main'
+        if 'compile' not in self.args:
+            self.args['compile'] = False
             
         self.runinfos = {}       
         self._getDevice()
@@ -1017,6 +1019,8 @@ class nisqaModel(object):
             self.model = NL.NISQA_DE(**self.model_args)     
         else:
             raise NotImplementedError('Model not available')                        
+        if self.args['compile']:
+            self.model.compile()
         
         # Load weights if pretrained model is used ------------------------------------
         if self.args['pretrained_model']:
