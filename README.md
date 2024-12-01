@@ -30,6 +30,8 @@ More information about the deep learning model structure, the used training data
 
 ## Installation
 
+### Using `conda`
+
 To install requirements install [Anaconda](https://www.anaconda.com/products/individual) and then use:
 
 ```setup
@@ -42,6 +44,21 @@ This will create a new environment with the name "nisqa". Activate this environm
 conda activate nisqa
 ```
 
+### Using `pip`
+
+Firstly, ensure that you have installed `libsndfile` through your Linux distribution's package manager.
+
+Then, run
+```setup3
+pip install -r requirements.txt
+```
+
+To use nisqa as a package, you may run
+```setup4
+pip install nisqa
+```
+
+_Note that this only installs `NISQA_lib` and `NISQA_model` package, not the weights or configurations._
 
 
 ## Using NISQA
