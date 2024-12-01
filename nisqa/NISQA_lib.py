@@ -2256,7 +2256,12 @@ def segment_specs(file_path, x, seg_length, seg_hop=1, max_length=None):
         x = torch.tensor(x)
 
     n_wins = x.shape[1]-(seg_length-1)
-    
+    if n_wins < 1:
+        raise ValueError(
+            f"Sample too short. Only {x.shape[1]} windows available but seg_length={seg_length}. "
+            f"Consider zero padding the audio sample. File: {file_path}"
+        )
+
     # broadcast magic to segment melspec
     idx1 = torch.arange(seg_length)
     idx2 = torch.arange(n_wins)
